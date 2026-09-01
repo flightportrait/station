@@ -19,14 +19,20 @@ echo "Station installer: $ARCH, into $HOME_DIR"
 mkdir -p "$HOME_DIR/state"
 
 # --- binaries ----------------------------------------------------------
-# Prebuilt releases come later; today the binaries arrive beside this
-# script (copied from a build machine) or get built here with Docker.
+# mlatc comes from the public release; stationd arrives beside this
+# script until its repo publishes releases too.
+MLATC_RELEASE="https://github.com/yoanntlm/mlat-bench/releases/latest/download"
 for bin in stationd mlatc; do
     if [ -x "$HOME_DIR/$bin" ]; then
         echo "$bin: already installed"
     elif [ -x "$(dirname "$0")/$bin" ]; then
         cp "$(dirname "$0")/$bin" "$HOME_DIR/$bin"
         echo "$bin: installed from alongside the script"
+    elif [ "$bin" = "mlatc" ]; then
+        echo "mlatc: downloading the release binary"
+        curl -fsSL -o "$HOME_DIR/mlatc" \
+            "$MLATC_RELEASE/mlatc-$ARCH-unknown-linux-musl"
+        chmod +x "$HOME_DIR/mlatc"
     else
         echo "$bin: missing. Copy it next to this script (a static"
         echo "  $ARCH build; see docs/PI.md for the Docker one-liner)."
