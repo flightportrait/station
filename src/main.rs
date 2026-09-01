@@ -7,6 +7,7 @@
 
 mod config;
 mod diagnose;
+mod init;
 mod model;
 mod status;
 mod supervise;
@@ -27,11 +28,17 @@ struct Cli {
     /// Validate the configuration and exit.
     #[arg(long)]
     check: bool,
+    /// Interactive setup: write the configuration by answering questions.
+    #[arg(long)]
+    init: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.init {
+        return init::run(&cli.config);
+    }
     let text = std::fs::read_to_string(&cli.config)
         .with_context(|| format!("cannot read {}", cli.config.display()))?;
     let cfg: config::Config = toml::from_str(&text)
