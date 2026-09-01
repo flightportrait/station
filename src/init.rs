@@ -34,23 +34,26 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
     let hostname = std::fs::read_to_string("/etc/hostname")
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    let name = ask("Station name (MLAT servers identify you by this)", &hostname);
+    let name = ask(
+        "Station name (MLAT servers identify you by this)",
+        &hostname,
+    );
 
-    println!("\nThe antenna's position. Right-click your house in Google Maps");
-    println!("and the first menu entry is these two numbers. MLAT uses them");
-    println!("to place other people's aircraft, so closer is better.");
-    let lat = loop {
-        let v = ask("Latitude", "");
-        match v.parse::<f64>() {
-            Ok(x) if (-90.0..=90.0).contains(&x) => break x,
-            _ => println!("  A number between -90 and 90, like 48.85824."),
-        }
-    };
-    let lon = loop {
-        let v = ask("Longitude", "");
-        match v.parse::<f64>() {
-            Ok(x) if (-180.0..=180.0).contains(&x) => break x,
-            _ => println!("  A number between -180 and 180, like 2.29444."),
+    println!("\nThe antenna's position. Right-click your house in Google Maps;");
+    println!("the first menu entry is the two numbers — paste them here as one.");
+    println!("MLAT places other people's aircraft with them, so closer is better.");
+    let (lat, lon) = loop {
+        let v = ask("Position (\"lat, lon\")", "");
+        let parts: Vec<f64> = v
+            .split([',', ' '])
+            .filter(|p| !p.trim().is_empty())
+            .filter_map(|p| p.trim().parse().ok())
+            .collect();
+        match parts.as_slice() {
+            [la, lo] if (-90.0..=90.0).contains(la) && (-180.0..=180.0).contains(lo) => {
+                break (*la, *lo)
+            }
+            _ => println!("  Two numbers, like: 48.85824, 2.29444"),
         }
     };
     let alt = loop {
@@ -61,10 +64,16 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
         }
     };
 
+    let sdr = detect_rtlsdr();
     println!("\nWhere do Mode S frames come from?");
     println!("  1. A readsb already running somewhere (host:port of its Beast output)");
-    println!("  2. This machine's SDR dongle (stationd will run readsb)");
-    let choice = ask("Input", "1");
+    if sdr {
+        println!("  2. This machine's SDR dongle — one is plugged in right now");
+    } else {
+        println!("  2. This machine's SDR dongle (stationd will run readsb)");
+    }
+    let default_input = if sdr { "2" } else { "1" };
+    let choice = ask("Input", default_input);
     let (input_beast, readsb_json, readsb_prog) = if choice.trim() == "2" {
         let readsb = ask("Path to the readsb binary", "/usr/local/bin/readsb");
         let json_dir = "state/readsb".to_string();
@@ -89,13 +98,17 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
     };
 
     println!("\nMLAT feeds. Feeding is non-exclusive; add as many as you like.");
+    for (i, (n, host)) in CATALOG.iter().enumerate() {
+        println!("  {}. {n} ({host})", i + 1);
+    }
+    println!("  {}. somewhere else", CATALOG.len() + 1);
     let mut feeds: Vec<(String, String, String)> = Vec::new();
     loop {
-        for (i, (n, host)) in CATALOG.iter().enumerate() {
-            println!("  {}. {n} ({host})", i + 1);
-        }
-        println!("  {}. somewhere else", CATALOG.len() + 1);
-        let done_hint = if feeds.is_empty() { "" } else { ", Enter = done" };
+        let done_hint = if feeds.is_empty() {
+            ""
+        } else {
+            ", Enter = done"
+        };
         let c = ask(&format!("Add a feed (number{done_hint})"), "");
         if c.is_empty() {
             if feeds.is_empty() {
@@ -117,19 +130,15 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
             _ => continue,
         };
         let uuid = ask(
-            &format!("  UUID for {fname} (Enter if you have none)"),
+            &format!("  Station key for {fname}, if they gave you one (Enter = none)"),
             "",
         );
         feeds.push((fname, host, uuid));
     }
-    // The config forbids some-feeds-with-uuid-some-without.
+    // Mixing keyed and unkeyed feeds is a config error; fill quietly.
     if feeds.iter().any(|f| !f.2.is_empty()) {
         for f in &mut feeds {
             if f.2.is_empty() {
-                println!(
-                    "  {} gets no UUID while others have one; generating a random one.",
-                    f.0
-                );
                 f.2 = pseudo_uuid();
             }
         }
@@ -152,6 +161,23 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
         out.push_str(&format!("\n[programs]\nreadsb = \"{r}\"\n"));
     }
 
+    println!("\nThe station, in short:");
+    println!("  {name} at {lat}, {lon}, antenna at {alt}");
+    let input_desc = if readsb_prog.is_some() {
+        "this machine's SDR"
+    } else {
+        &input_beast
+    };
+    println!("  frames from {input_desc}");
+    for (n, h, _) in &feeds {
+        println!("  feeding {n} ({h})");
+    }
+    let go = ask("Write this configuration", "yes");
+    if !go.eq_ignore_ascii_case("yes") && !go.eq_ignore_ascii_case("y") {
+        println!("Nothing written.");
+        return Ok(());
+    }
+
     let cfg: crate::config::Config = toml::from_str(&out)?;
     let problems = cfg.problems();
     if !problems.is_empty() {
@@ -167,8 +193,33 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
     }
     std::fs::write(config_path, &out)?;
     println!("Wrote {}.", config_path.display());
-    println!("Start the station:  stationd --config {}", config_path.display());
+    if std::path::Path::new("/etc/systemd/system/stationd.service").exists() {
+        println!("Apply it:  sudo systemctl restart stationd");
+    } else {
+        println!(
+            "Start the station:  stationd --config {}",
+            config_path.display()
+        );
+        println!("(scripts/install.sh sets it up as a service that survives reboots.)");
+    }
     Ok(())
+}
+
+/// An RTL-SDR on the USB bus, detected without any tooling: the known
+/// vendor:product pairs in sysfs.
+fn detect_rtlsdr() -> bool {
+    let Ok(dir) = std::fs::read_dir("/sys/bus/usb/devices") else {
+        return false;
+    };
+    for e in dir.flatten() {
+        let p = e.path();
+        let vid = std::fs::read_to_string(p.join("idVendor")).unwrap_or_default();
+        let pid = std::fs::read_to_string(p.join("idProduct")).unwrap_or_default();
+        if vid.trim() == "0bda" && matches!(pid.trim(), "2838" | "2832") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Random UUID-shaped identifier from the system generator.
