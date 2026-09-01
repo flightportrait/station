@@ -1,0 +1,33 @@
+# Station configuration. Every mistake in this file produces a sentence
+# that says what to fix; stationd refuses to start half-configured.
+
+[station]
+name = "my-station"
+lat = 1.29
+lon = 103.85
+# Antenna altitude: meters, or with a unit ("65m", "213ft"). MLAT solves
+# other people's aircraft with this; a wrong value quietly harms them.
+alt = "65m"
+
+[input]
+# Where Mode S frames come from: an existing readsb's Beast output.
+beast = "127.0.0.1:30005"
+
+# One block per MLAT destination. Non-exclusive: add as many as you like.
+[[feed]]
+name = "example"
+mlat = "mlat.example.net:31090"
+# uuid = "00000000-0000-0000-0000-000000000000"
+
+[results]
+# Where returned MLAT positions go, as Beast frames (a readsb ingest
+# port). Omit to discard results.
+# beast_connect = "127.0.0.1:31004"
+
+[status]
+listen = "127.0.0.1:8654"
+
+[programs]
+# Paths to the supervised binaries; the defaults find them on PATH.
+mlatc = "mlatc"
+# readsb = "/usr/bin/readsb --device-type rtlsdr ..."  # supervised when set
