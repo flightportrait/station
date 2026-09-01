@@ -124,7 +124,6 @@ impl StatusServer {
             aircraft_now,
             rate_now: m.recent_rate(10),
             rate_baseline: m.baseline_rate(),
-            minutes_of_history: m.ring.len(),
             feeds,
             failing_children: failing,
         };

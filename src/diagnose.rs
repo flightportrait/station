@@ -31,7 +31,6 @@ pub struct View {
     pub aircraft_now: u32,
     pub rate_now: Option<f64>,
     pub rate_baseline: Option<f64>,
-    pub minutes_of_history: usize,
     pub feeds: Vec<FeedView>,
     /// (child name, restarts) for children currently in backoff.
     pub failing_children: Vec<(String, u64)>,
@@ -151,7 +150,6 @@ mod tests {
             aircraft_now: 12,
             rate_now: Some(500.0),
             rate_baseline: Some(520.0),
-            minutes_of_history: 600,
             feeds: vec![
                 FeedView {
                     name: "a".into(),
