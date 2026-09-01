@@ -42,7 +42,12 @@ pub struct Input {
 #[serde(deny_unknown_fields)]
 pub struct Feed {
     pub name: String,
-    pub mlat: String,
+    /// ADS-B destination (Beast over TCP, fed by readsb when stationd runs it).
+    #[serde(default)]
+    pub adsb: Option<String>,
+    /// MLAT server (mlatc protocol).
+    #[serde(default)]
+    pub mlat: Option<String>,
     #[serde(default)]
     pub uuid: Option<String>,
 }
@@ -159,16 +164,39 @@ impl Config {
             if f.name.trim().is_empty() {
                 p.push(format!("feed #{} has an empty name.", i + 1));
             }
-            if !f.mlat.contains(':') {
+            if f.adsb.is_none() && f.mlat.is_none() {
                 p.push(format!(
-                    "feed \"{}\": mlat is \"{}\": write host:port.",
-                    f.name, f.mlat
+                    "feed \"{}\" has neither adsb nor mlat: nothing to send it.",
+                    f.name
                 ));
             }
+            for (key, val) in [("adsb", &f.adsb), ("mlat", &f.mlat)] {
+                if let Some(v) = val {
+                    if !v.contains(':') {
+                        p.push(format!(
+                            "feed \"{}\": {key} is \"{v}\": write host:port.",
+                            f.name
+                        ));
+                    }
+                }
+            }
         }
-        let with_uuid = self.feeds.iter().filter(|f| f.uuid.is_some()).count();
-        if with_uuid != 0 && with_uuid != self.feeds.len() {
-            p.push("some feeds have a uuid and some do not: give every feed one, or none.".into());
+        if self.feeds.iter().any(|f| f.adsb.is_some()) && self.programs.readsb.is_none() {
+            p.push(
+                "a feed has an adsb destination but stationd does not run readsb \
+                 ([programs].readsb is unset): the ADS-B data would never be sent. \
+                 Either let stationd run readsb, or add the --net-connector to \
+                 your own readsb and drop the adsb line here."
+                    .into(),
+            );
+        }
+        let mlat_feeds = || self.feeds.iter().filter(|f| f.mlat.is_some());
+        let with_uuid = mlat_feeds().filter(|f| f.uuid.is_some()).count();
+        if with_uuid != 0 && with_uuid != mlat_feeds().count() {
+            p.push(
+                "some MLAT feeds have a uuid and some do not: give every one a uuid, or none."
+                    .into(),
+            );
         }
         if let Some(r) = &self.results.beast_connect {
             if !r.contains(':') {
@@ -203,11 +231,12 @@ impl Config {
             "--stats-json".into(),
             stats_dir.join("mlat-stats.json").display().to_string(),
         ];
-        for f in &self.feeds {
+        let mlat_feeds: Vec<&Feed> = self.feeds.iter().filter(|f| f.mlat.is_some()).collect();
+        for f in &mlat_feeds {
             a.push("--server".into());
-            a.push(f.mlat.clone());
+            a.push(f.mlat.clone().expect("filtered on mlat"));
         }
-        for f in &self.feeds {
+        for f in &mlat_feeds {
             if let Some(u) = &f.uuid {
                 a.push("--uuid".into());
                 a.push(u.clone());
@@ -216,6 +245,27 @@ impl Config {
         if let Some(r) = &self.results.beast_connect {
             a.push("--results".into());
             a.push(format!("beast,connect,{r}"));
+        }
+        a
+    }
+
+    /// Extra readsb arguments: one --net-connector per ADS-B feed
+    /// (readsb's "host,port,protocol[,uuid=…]" form). Only meaningful
+    /// when stationd runs readsb itself.
+    pub fn readsb_feed_args(&self) -> Vec<String> {
+        let mut a = Vec::new();
+        for f in &self.feeds {
+            if let Some(dest) = &f.adsb {
+                let Some((host, port)) = dest.rsplit_once(':') else {
+                    continue;
+                };
+                let mut c = format!("{host},{port},beast_reduce_plus_out");
+                if let Some(u) = &f.uuid {
+                    c.push_str(&format!(",uuid={u}"));
+                }
+                a.push("--net-connector".into());
+                a.push(c);
+            }
         }
         a
     }
@@ -277,11 +327,55 @@ beast = "nonsense"
     }
 
     #[test]
-    fn mlatc_args_carry_every_feed() {
+    fn mlatc_args_carry_only_mlat_feeds() {
         let c = cfg(&format!(
-            "{GOOD}\n[[feed]]\nname = \"b\"\nmlat = \"h2:31090\"\n"
+            "{GOOD}\n[[feed]]\nname = \"b\"\nmlat = \"h2:31090\"\n\n[[feed]]\nname = \"c\"\nadsb = \"h3:30004\"\n"
         ));
         let a = c.mlatc_args(std::path::Path::new("/tmp"));
         assert_eq!(a.iter().filter(|x| *x == "--server").count(), 2);
+    }
+
+    #[test]
+    fn adsb_only_feed_is_valid() {
+        let c = cfg(&format!(
+            "{GOOD}\n[[feed]]\nname = \"fp\"\nadsb = \"feed.example:30004\"\n\n[programs]\nreadsb = \"readsb --quiet\"\n"
+        ));
+        assert!(c.problems().is_empty(), "{:?}", c.problems());
+    }
+
+    #[test]
+    fn adsb_feed_without_local_readsb_is_refused() {
+        let c = cfg(&format!(
+            "{GOOD}\n[[feed]]\nname = \"fp\"\nadsb = \"feed.example:30004\"\n"
+        ));
+        assert_eq!(c.problems().len(), 1, "{:?}", c.problems());
+    }
+
+    #[test]
+    fn adsb_feeds_become_net_connectors() {
+        let c = cfg(&format!(
+            "{GOOD}\n[[feed]]\nname = \"fp\"\nadsb = \"feed.example:30004\"\nuuid = \"u-1\"\n"
+        ));
+        assert_eq!(
+            c.readsb_feed_args(),
+            vec![
+                "--net-connector".to_string(),
+                "feed.example,30004,beast_reduce_plus_out,uuid=u-1".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_feed_is_refused() {
+        let c = cfg(&format!("{GOOD}\n[[feed]]\nname = \"void\"\n"));
+        assert_eq!(c.problems().len(), 1);
+    }
+
+    #[test]
+    fn adsb_only_feed_needs_no_uuid() {
+        let c = cfg(&format!(
+            "{GOOD}\nuuid = \"x\"\n\n[[feed]]\nname = \"fp\"\nadsb = \"feed.example:30004\"\n\n[programs]\nreadsb = \"readsb --quiet\"\n"
+        ));
+        assert!(c.problems().is_empty(), "{:?}", c.problems());
     }
 }

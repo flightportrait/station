@@ -2,18 +2,353 @@
 //!
 //! The point is that a beginner never opens an editor or hunts for an
 //! aggregator's hostname. Every answer is validated on the spot with
-//! the same rules the daemon enforces at startup.
+//! the same rules the daemon enforces at startup. On a terminal the
+//! questions use arrow-key menus (dialoguer); piped input falls back
+//! to plain numbered prompts so scripts and tests keep working.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, IsTerminal, Write};
 
-/// Aggregators offered by number. Feeding is non-exclusive; pick any.
-const CATALOG: &[(&str, &str)] = &[
-    ("adsb.lol", "in.adsb.lol:31090"),
-    ("adsb.fi", "feed.adsb.fi:31090"),
-    ("adsb.win", "mlat.adsb.win:31090"),
+struct Aggregator {
+    name: &'static str,
+    adsb: Option<&'static str>,
+    mlat: Option<&'static str>,
+    note: &'static str,
+}
+
+/// Aggregators on offer. Feeding is non-exclusive; pick any.
+const CATALOG: &[Aggregator] = &[
+    Aggregator {
+        name: "FlightPortrait",
+        adsb: Some("feed.flightportrait.com:30004"),
+        mlat: None,
+        note: "ours — powers the art frames; MLAT when our solver goes public",
+    },
+    Aggregator {
+        name: "adsb.lol",
+        adsb: Some("in.adsb.lol:30004"),
+        mlat: Some("in.adsb.lol:31090"),
+        note: "open data, no account needed",
+    },
+    Aggregator {
+        name: "adsb.fi",
+        adsb: Some("feed.adsb.fi:30004"),
+        mlat: Some("feed.adsb.fi:31090"),
+        note: "open data, no account needed",
+    },
+    Aggregator {
+        name: "adsb.win",
+        adsb: Some("feed.adsb.win:30004"),
+        mlat: Some("mlat.adsb.win:31090"),
+        note: "open data, no account needed",
+    },
 ];
 
+struct FeedChoice {
+    name: String,
+    adsb: Option<String>,
+    mlat: Option<String>,
+    uuid: String,
+}
+
+struct Answers {
+    name: String,
+    lat: f64,
+    lon: f64,
+    alt: String,
+    input_beast: String,
+    readsb_json: Option<String>,
+    readsb_prog: Option<String>,
+    feeds: Vec<FeedChoice>,
+}
+
 pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
+    let fancy = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let answers = if fancy {
+        gather_fancy()?
+    } else {
+        gather_plain()?
+    };
+    let Some(a) = answers else {
+        println!("Nothing written.");
+        return Ok(());
+    };
+    write_config(config_path, &a)
+}
+
+fn parse_position(v: &str) -> Option<(f64, f64)> {
+    let parts: Vec<f64> = v
+        .split([',', ' '])
+        .filter(|p| !p.trim().is_empty())
+        .filter_map(|p| p.trim().parse().ok())
+        .collect();
+    match parts.as_slice() {
+        [la, lo] if (-90.0..=90.0).contains(la) && (-180.0..=180.0).contains(lo) => {
+            Some((*la, *lo))
+        }
+        _ => None,
+    }
+}
+
+fn default_station_name() -> String {
+    std::fs::read_to_string("/etc/hostname")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn readsb_program(readsb_path: &str, json_dir: &str, lat: f64, lon: f64) -> String {
+    format!(
+        "{readsb_path} --device-type rtlsdr --gain auto --quiet \
+         --net --net-bo-port 30005 --write-json {json_dir} \
+         --write-json-every 1 --lat {lat} --lon {lon}"
+    )
+}
+
+/// Uniform per-feed post-processing: drop ADS-B destinations the station
+/// cannot serve (no local readsb), telling the user what to do instead;
+/// drop feeds left with nothing.
+fn resolve_feeds(mut feeds: Vec<FeedChoice>, local_readsb: bool) -> Vec<FeedChoice> {
+    if !local_readsb {
+        for f in &mut feeds {
+            if let Some(dest) = f.adsb.take() {
+                let (host, port) = dest.rsplit_once(':').unwrap_or((dest.as_str(), "30004"));
+                println!(
+                    "  note: {} takes ADS-B from readsb, and yours runs elsewhere.",
+                    f.name
+                );
+                println!(
+                    "        Add this to that readsb instead:  --net-connector {host},{port},beast_reduce_plus_out"
+                );
+            }
+        }
+    }
+    feeds.retain(|f| {
+        if f.adsb.is_none() && f.mlat.is_none() {
+            println!("  {} skipped: nothing this station could send it.", f.name);
+            false
+        } else {
+            true
+        }
+    });
+    // Mixing keyed and unkeyed MLAT feeds is a config error; fill quietly.
+    if feeds.iter().any(|f| f.mlat.is_some() && !f.uuid.is_empty()) {
+        for f in &mut feeds {
+            if f.mlat.is_some() && f.uuid.is_empty() {
+                f.uuid = pseudo_uuid();
+            }
+        }
+    }
+    feeds
+}
+
+// --- terminal flow ------------------------------------------------------
+
+fn gather_fancy() -> anyhow::Result<Option<Answers>> {
+    use dialoguer::{theme::ColorfulTheme, Confirm, Input, MultiSelect, Select};
+    let th = ColorfulTheme::default();
+
+    println!("Station setup — a few questions, then a working station.\n");
+
+    let name: String = Input::with_theme(&th)
+        .with_prompt("Station name (MLAT servers identify you by this)")
+        .default(default_station_name())
+        .validate_with(|s: &String| {
+            if s.trim().is_empty() {
+                Err("a name, any name")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()?;
+
+    println!();
+    println!("The antenna's position. Right-click your house in Google Maps;");
+    println!("the first menu entry is the two numbers — paste them here as one.");
+    println!("MLAT places other people's aircraft with them, so closer is better.");
+    let pos: String = Input::with_theme(&th)
+        .with_prompt("Position (lat, lon)")
+        .validate_with(|s: &String| match parse_position(s) {
+            Some(_) => Ok(()),
+            None => Err("two numbers, like: 48.85824, 2.29444"),
+        })
+        .interact_text()?;
+    let (lat, lon) = parse_position(&pos).expect("validated");
+
+    let alt: String = Input::with_theme(&th)
+        .with_prompt("Antenna altitude (\"65m\" or \"213ft\")")
+        .validate_with(|s: &String| match crate::config::parse_alt(s) {
+            Some(a) if (-1000.0..=10000.0).contains(&a) => Ok(()),
+            _ => Err("a number with m or ft, like 12m"),
+        })
+        .interact_text()?;
+
+    println!();
+    let sdr = detect_rtlsdr();
+    let sdr_label = if sdr {
+        "This machine's SDR dongle — one is plugged in right now"
+    } else {
+        "This machine's SDR dongle (stationd will run readsb)"
+    };
+    let input_choice = Select::with_theme(&th)
+        .with_prompt("Where do Mode S frames come from?")
+        .items(&[
+            "A readsb already running somewhere (host:port of its Beast output)",
+            sdr_label,
+        ])
+        .default(if sdr { 1 } else { 0 })
+        .interact()?;
+    let (input_beast, readsb_json, readsb_prog) = if input_choice == 1 {
+        let readsb: String = Input::with_theme(&th)
+            .with_prompt("Path to the readsb binary")
+            .default("/usr/local/bin/readsb".into())
+            .interact_text()?;
+        let json_dir = "state/readsb".to_string();
+        (
+            "127.0.0.1:30005".to_string(),
+            Some(json_dir.clone()),
+            Some(readsb_program(&readsb, &json_dir, lat, lon)),
+        )
+    } else {
+        let src: String = Input::with_theme(&th)
+            .with_prompt("Beast source (host:port)")
+            .default("127.0.0.1:30005".into())
+            .validate_with(|s: &String| {
+                if s.contains(':') {
+                    Ok(())
+                } else {
+                    Err("host:port, like 192.168.1.10:30005")
+                }
+            })
+            .interact_text()?;
+        (src, None, None)
+    };
+
+    println!();
+    println!("Aggregators. Feeding is non-exclusive — space toggles, Enter confirms.");
+    let items: Vec<String> = CATALOG
+        .iter()
+        .map(|a| {
+            let what = match (a.adsb, a.mlat) {
+                (Some(_), Some(_)) => "ADS-B + MLAT",
+                (Some(_), None) => "ADS-B",
+                _ => "MLAT",
+            };
+            format!("{}  ({what}) — {}", a.name, a.note)
+        })
+        .collect();
+    let picked = loop {
+        let p = MultiSelect::with_theme(&th)
+            .with_prompt("Feed")
+            .items(&items)
+            .defaults(&vec![true; items.len()])
+            .interact()?;
+        if !p.is_empty() {
+            break p;
+        }
+        println!("  At least one, or the station tells no one.");
+    };
+
+    let mut feeds: Vec<FeedChoice> = Vec::new();
+    for i in picked {
+        let a = &CATALOG[i];
+        let uuid: String = Input::with_theme(&th)
+            .with_prompt(format!(
+                "Station key for {}, if they gave you one (Enter = none)",
+                a.name
+            ))
+            .allow_empty(true)
+            .interact_text()?;
+        feeds.push(FeedChoice {
+            name: a.name.to_string(),
+            adsb: a.adsb.map(String::from),
+            mlat: a.mlat.map(String::from),
+            uuid: uuid.trim().to_string(),
+        });
+    }
+    while Confirm::with_theme(&th)
+        .with_prompt("Add an aggregator not on the list?")
+        .default(false)
+        .interact()?
+    {
+        if let Some(f) = ask_custom_feed(&th)? {
+            feeds.push(f);
+        }
+    }
+
+    let feeds = resolve_feeds(feeds, readsb_prog.is_some());
+    if feeds.is_empty() {
+        println!("No usable feeds; nothing to set up.");
+        return Ok(None);
+    }
+
+    let a = Answers {
+        name,
+        lat,
+        lon,
+        alt,
+        input_beast,
+        readsb_json,
+        readsb_prog,
+        feeds,
+    };
+    print_summary(&a);
+    if !Confirm::with_theme(&th)
+        .with_prompt("Write this configuration")
+        .default(true)
+        .interact()?
+    {
+        return Ok(None);
+    }
+    Ok(Some(a))
+}
+
+fn ask_custom_feed(th: &dialoguer::theme::ColorfulTheme) -> anyhow::Result<Option<FeedChoice>> {
+    use dialoguer::Input;
+    let name: String = Input::with_theme(th)
+        .with_prompt("  Feed name")
+        .interact_text()?;
+    let mlat: String = Input::with_theme(th)
+        .with_prompt("  MLAT server (host:port, Enter = none)")
+        .allow_empty(true)
+        .validate_with(|s: &String| {
+            if s.trim().is_empty() || s.contains(':') {
+                Ok(())
+            } else {
+                Err("host:port, or nothing")
+            }
+        })
+        .interact_text()?;
+    let adsb: String = Input::with_theme(th)
+        .with_prompt("  ADS-B / Beast destination (host:port, Enter = none)")
+        .allow_empty(true)
+        .validate_with(|s: &String| {
+            if s.trim().is_empty() || s.contains(':') {
+                Ok(())
+            } else {
+                Err("host:port, or nothing")
+            }
+        })
+        .interact_text()?;
+    if mlat.trim().is_empty() && adsb.trim().is_empty() {
+        println!("  Neither an MLAT server nor an ADS-B destination; skipped.");
+        return Ok(None);
+    }
+    let uuid: String = Input::with_theme(th)
+        .with_prompt(format!(
+            "  Station key for {name}, if they gave you one (Enter = none)"
+        ))
+        .allow_empty(true)
+        .interact_text()?;
+    Ok(Some(FeedChoice {
+        name,
+        adsb: Some(adsb.trim().to_string()).filter(|s| !s.is_empty()),
+        mlat: Some(mlat.trim().to_string()).filter(|s| !s.is_empty()),
+        uuid: uuid.trim().to_string(),
+    }))
+}
+
+// --- piped flow ---------------------------------------------------------
+
+fn gather_plain() -> anyhow::Result<Option<Answers>> {
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
     let mut ask = |prompt: &str, default: &str| -> String {
@@ -31,12 +366,9 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
 
     println!("Station setup. Enter accepts the [default].\n");
 
-    let hostname = std::fs::read_to_string("/etc/hostname")
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
     let name = ask(
         "Station name (MLAT servers identify you by this)",
-        &hostname,
+        &default_station_name(),
     );
 
     println!("\nThe antenna's position. Right-click your house in Google Maps;");
@@ -44,16 +376,9 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
     println!("MLAT places other people's aircraft with them, so closer is better.");
     let (lat, lon) = loop {
         let v = ask("Position (\"lat, lon\")", "");
-        let parts: Vec<f64> = v
-            .split([',', ' '])
-            .filter(|p| !p.trim().is_empty())
-            .filter_map(|p| p.trim().parse().ok())
-            .collect();
-        match parts.as_slice() {
-            [la, lo] if (-90.0..=90.0).contains(la) && (-180.0..=180.0).contains(lo) => {
-                break (*la, *lo)
-            }
-            _ => println!("  Two numbers, like: 48.85824, 2.29444"),
+        match parse_position(&v) {
+            Some(p) => break p,
+            None => println!("  Two numbers, like: 48.85824, 2.29444"),
         }
     };
     let alt = loop {
@@ -80,11 +405,7 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
         (
             "127.0.0.1:30005".to_string(),
             Some(json_dir.clone()),
-            Some(format!(
-                "{readsb} --device-type rtlsdr --gain auto --quiet \
-                 --net --net-bo-port 30005 --write-json {json_dir} \
-                 --write-json-every 1 --lat {lat} --lon {lon}"
-            )),
+            Some(readsb_program(&readsb, &json_dir, lat, lon)),
         )
     } else {
         let src = loop {
@@ -97,12 +418,17 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
         (src, None, None)
     };
 
-    println!("\nMLAT feeds. Feeding is non-exclusive; add as many as you like.");
-    for (i, (n, host)) in CATALOG.iter().enumerate() {
-        println!("  {}. {n} ({host})", i + 1);
+    println!("\nAggregators. Feeding is non-exclusive; add as many as you like.");
+    for (i, a) in CATALOG.iter().enumerate() {
+        let what = match (a.adsb, a.mlat) {
+            (Some(_), Some(_)) => "ADS-B + MLAT",
+            (Some(_), None) => "ADS-B",
+            _ => "MLAT",
+        };
+        println!("  {}. {} ({what}) — {}", i + 1, a.name, a.note);
     }
     println!("  {}. somewhere else", CATALOG.len() + 1);
-    let mut feeds: Vec<(String, String, String)> = Vec::new();
+    let mut feeds: Vec<FeedChoice> = Vec::new();
     loop {
         let done_hint = if feeds.is_empty() {
             ""
@@ -117,15 +443,24 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
             }
             break;
         }
-        let (fname, host) = match c.parse::<usize>() {
+        let (fname, adsb, mlat) = match c.parse::<usize>() {
             Ok(i) if i >= 1 && i <= CATALOG.len() => {
-                let (n, h) = CATALOG[i - 1];
-                (n.to_string(), h.to_string())
+                let a = &CATALOG[i - 1];
+                (
+                    a.name.to_string(),
+                    a.adsb.map(String::from),
+                    a.mlat.map(String::from),
+                )
             }
             Ok(i) if i == CATALOG.len() + 1 => {
                 let n = ask("  Feed name", "");
-                let h = ask("  MLAT server (host:port)", "");
-                (n, h)
+                let m = ask("  MLAT server (host:port, Enter = none)", "");
+                let d = ask("  ADS-B / Beast destination (host:port, Enter = none)", "");
+                (
+                    n,
+                    Some(d).filter(|s| !s.is_empty()),
+                    Some(m).filter(|s| !s.is_empty()),
+                )
             }
             _ => continue,
         };
@@ -133,49 +468,84 @@ pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
             &format!("  Station key for {fname}, if they gave you one (Enter = none)"),
             "",
         );
-        feeds.push((fname, host, uuid));
-    }
-    // Mixing keyed and unkeyed feeds is a config error; fill quietly.
-    if feeds.iter().any(|f| !f.2.is_empty()) {
-        for f in &mut feeds {
-            if f.2.is_empty() {
-                f.2 = pseudo_uuid();
-            }
-        }
+        feeds.push(FeedChoice {
+            name: fname,
+            adsb,
+            mlat,
+            uuid,
+        });
     }
 
-    let mut out = String::new();
-    out.push_str(&format!(
-        "[station]\nname = \"{name}\"\nlat = {lat}\nlon = {lon}\nalt = \"{alt}\"\n\n[input]\nbeast = \"{input_beast}\"\n"
-    ));
-    if let Some(j) = &readsb_json {
-        out.push_str(&format!("readsb_json = \"{j}\"\n"));
-    }
-    for (n, h, u) in &feeds {
-        out.push_str(&format!("\n[[feed]]\nname = \"{n}\"\nmlat = \"{h}\"\n"));
-        if !u.is_empty() {
-            out.push_str(&format!("uuid = \"{u}\"\n"));
-        }
-    }
-    if let Some(r) = &readsb_prog {
-        out.push_str(&format!("\n[programs]\nreadsb = \"{r}\"\n"));
+    let feeds = resolve_feeds(feeds, readsb_prog.is_some());
+    if feeds.is_empty() {
+        println!("No usable feeds; nothing to set up.");
+        return Ok(None);
     }
 
-    println!("\nThe station, in short:");
-    println!("  {name} at {lat}, {lon}, antenna at {alt}");
-    let input_desc = if readsb_prog.is_some() {
-        "this machine's SDR"
-    } else {
-        &input_beast
+    let a = Answers {
+        name,
+        lat,
+        lon,
+        alt,
+        input_beast,
+        readsb_json,
+        readsb_prog,
+        feeds,
     };
-    println!("  frames from {input_desc}");
-    for (n, h, _) in &feeds {
-        println!("  feeding {n} ({h})");
-    }
+    print_summary(&a);
     let go = ask("Write this configuration", "yes");
     if !go.eq_ignore_ascii_case("yes") && !go.eq_ignore_ascii_case("y") {
-        println!("Nothing written.");
-        return Ok(());
+        return Ok(None);
+    }
+    Ok(Some(a))
+}
+
+// --- shared tail --------------------------------------------------------
+
+fn print_summary(a: &Answers) {
+    println!("\nThe station, in short:");
+    println!("  {} at {}, {}, antenna at {}", a.name, a.lat, a.lon, a.alt);
+    let input_desc = if a.readsb_prog.is_some() {
+        "this machine's SDR"
+    } else {
+        &a.input_beast
+    };
+    println!("  frames from {input_desc}");
+    for f in &a.feeds {
+        let mut what = Vec::new();
+        if let Some(d) = &f.adsb {
+            what.push(format!("ADS-B to {d}"));
+        }
+        if let Some(m) = &f.mlat {
+            what.push(format!("MLAT to {m}"));
+        }
+        println!("  feeding {} ({})", f.name, what.join(", "));
+    }
+}
+
+fn write_config(config_path: &std::path::Path, a: &Answers) -> anyhow::Result<()> {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "[station]\nname = \"{}\"\nlat = {}\nlon = {}\nalt = \"{}\"\n\n[input]\nbeast = \"{}\"\n",
+        a.name, a.lat, a.lon, a.alt, a.input_beast
+    ));
+    if let Some(j) = &a.readsb_json {
+        out.push_str(&format!("readsb_json = \"{j}\"\n"));
+    }
+    for f in &a.feeds {
+        out.push_str(&format!("\n[[feed]]\nname = \"{}\"\n", f.name));
+        if let Some(d) = &f.adsb {
+            out.push_str(&format!("adsb = \"{d}\"\n"));
+        }
+        if let Some(m) = &f.mlat {
+            out.push_str(&format!("mlat = \"{m}\"\n"));
+        }
+        if !f.uuid.is_empty() {
+            out.push_str(&format!("uuid = \"{}\"\n", f.uuid));
+        }
+    }
+    if let Some(r) = &a.readsb_prog {
+        out.push_str(&format!("\n[programs]\nreadsb = \"{r}\"\n"));
     }
 
     let cfg: crate::config::Config = toml::from_str(&out)?;

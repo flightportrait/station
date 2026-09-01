@@ -61,23 +61,27 @@ async fn main() -> Result<()> {
     let statuses: supervise::StatusMap = Arc::new(Mutex::new(Default::default()));
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    supervise::spawn(
-        supervise::ChildSpec {
-            name: "mlatc".into(),
-            cmd: cfg.programs.mlatc.clone(),
-            args: cfg.mlatc_args(&cli.state_dir),
-        },
-        statuses.clone(),
-        shutdown_rx.clone(),
-    );
+    if cfg.feeds.iter().any(|f| f.mlat.is_some()) {
+        supervise::spawn(
+            supervise::ChildSpec {
+                name: "mlatc".into(),
+                cmd: cfg.programs.mlatc.clone(),
+                args: cfg.mlatc_args(&cli.state_dir),
+            },
+            statuses.clone(),
+            shutdown_rx.clone(),
+        );
+    }
     if let Some(readsb) = &cfg.programs.readsb {
         let mut parts = readsb.split_whitespace().map(String::from);
         let cmd = parts.next().context("programs.readsb is empty")?;
+        let mut args: Vec<String> = parts.collect();
+        args.extend(cfg.readsb_feed_args());
         supervise::spawn(
             supervise::ChildSpec {
                 name: "readsb".into(),
                 cmd,
-                args: parts.collect(),
+                args,
             },
             statuses.clone(),
             shutdown_rx.clone(),
@@ -127,7 +131,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    let n_feeds = cfg.feeds.len();
+    let n_mlat = cfg.feeds.iter().filter(|f| f.mlat.is_some()).count();
     let server = status::StatusServer {
         station_name: cfg.station.name.clone(),
         started_unix: std::time::SystemTime::now()
@@ -139,7 +143,10 @@ async fn main() -> Result<()> {
         feeds: cfg
             .feeds
             .iter()
-            .map(|f| (f.name.clone(), status::stats_file_for(&f.mlat, n_feeds)))
+            .filter_map(|f| {
+                let mlat = f.mlat.as_ref()?;
+                Some((f.name.clone(), status::stats_file_for(mlat, n_mlat)))
+            })
             .collect(),
         readsb_configured: cfg.input.readsb_json.is_some(),
         shared: shared.clone(),
