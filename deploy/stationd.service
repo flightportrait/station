@@ -1,0 +1,16 @@
+# Install: copy to /etc/systemd/system/, adjust paths and user, then
+#   systemctl daemon-reload && systemctl enable --now stationd
+[Unit]
+Description=Station feeder runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=station
+WorkingDirectory=/home/station/station
+ExecStart=/home/station/station/stationd --config /home/station/station/station.toml --state-dir /home/station/station/state
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
