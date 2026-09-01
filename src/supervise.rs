@@ -95,10 +95,7 @@ pub fn spawn(spec: ChildSpec, statuses: StatusMap, mut shutdown: watch::Receiver
                     });
                 }
                 Err(e) => {
-                    println!(
-                        "stationd: [{}] cannot start {}: {e}",
-                        spec.name, spec.cmd
-                    );
+                    println!("stationd: [{}] cannot start {}: {e}", spec.name, spec.cmd);
                     set(&statuses, &spec.name, |st| {
                         st.state = "backoff".into();
                         st.restarts += 1;

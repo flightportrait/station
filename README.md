@@ -11,8 +11,16 @@ Beast decode, every configured MLAT server — and readsb when
 its output flows through the stationd journal with a name prefix.
 SIGTERM and Ctrl-C stop everything, children included.
 
-Status: v0, private. The status page, diagnostics, and the setup flow
-come next; see the plan in the product documentation.
+The status page at `/` shows the station's numbers — aircraft now,
+message rate, today against yesterday, farthest heard — and its feeds'
+MLAT sync state. A healthy page carries no sentences; diagnostics
+appear only when a rule fires, each one a plain sentence with an
+action. The MLAT rules triangulate: one server rejecting the station
+is that server's problem, every server rejecting it means the
+station's own position or clock is wrong.
+
+Status: v0, private. Visual design and the diagnostic wording await
+the founder pass; the setup flow comes next.
 
 ## Run
 

@@ -6,6 +6,8 @@
 //! sentences. See station.example.toml.
 
 mod config;
+mod diagnose;
+mod model;
 mod status;
 mod supervise;
 
@@ -75,6 +77,50 @@ async fn main() -> Result<()> {
         );
     }
 
+    let metrics_path = cli.state_dir.join("metrics.json");
+    let shared = Arc::new(status::Shared {
+        metrics: Mutex::new(model::Metrics::load(&metrics_path)),
+        snapshot: Mutex::new(None),
+    });
+    // Sampler: read readsb's JSON every 15 s; fold a sample into the ring
+    // once a minute; persist every 5 minutes.
+    if let Some(dir) = cfg.input.readsb_json.clone() {
+        let shared = shared.clone();
+        let (lat, lon) = (cfg.station.lat, cfg.station.lon);
+        let mpath = metrics_path.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
+            let mut last_minute = 0u64;
+            let mut last_save = 0u64;
+            loop {
+                tick.tick().await;
+                let Some(snap) = model::read_snapshot(&dir, lat, lon) else {
+                    *shared.snapshot.lock().unwrap() = None;
+                    continue;
+                };
+                let unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let minute = unix / 60;
+                {
+                    let mut m = shared.metrics.lock().unwrap();
+                    if minute != last_minute {
+                        last_minute = minute;
+                        let hexes = snap.hexes.clone();
+                        m.tick(unix, &snap, hexes.into_iter());
+                    }
+                    if unix.saturating_sub(last_save) >= 300 {
+                        last_save = unix;
+                        m.save(&mpath);
+                    }
+                }
+                *shared.snapshot.lock().unwrap() = Some((std::time::Instant::now(), snap));
+            }
+        });
+    }
+
+    let n_feeds = cfg.feeds.len();
     let server = status::StatusServer {
         station_name: cfg.station.name.clone(),
         started_unix: std::time::SystemTime::now()
@@ -83,7 +129,13 @@ async fn main() -> Result<()> {
             .unwrap_or(0),
         children: statuses,
         stats_dir: cli.state_dir.clone(),
-        feeds: cfg.feeds.iter().map(|f| f.name.clone()).collect(),
+        feeds: cfg
+            .feeds
+            .iter()
+            .map(|f| (f.name.clone(), status::stats_file_for(&f.mlat, n_feeds)))
+            .collect(),
+        readsb_configured: cfg.input.readsb_json.is_some(),
+        shared: shared.clone(),
     };
     let listen = cfg.status.listen.clone();
     tokio::spawn(server.run(listen));
@@ -96,6 +148,7 @@ async fn main() -> Result<()> {
         _ = sigterm.recv() => {}
     }
     println!("stationd: shutting down");
+    shared.metrics.lock().unwrap().save(&metrics_path);
     let _ = shutdown_tx.send(true);
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     Ok(())

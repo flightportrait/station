@@ -32,6 +32,10 @@ pub struct Station {
 #[serde(deny_unknown_fields)]
 pub struct Input {
     pub beast: String,
+    /// readsb's JSON output directory (--write-json). Enables aircraft
+    /// counts, range, history, and most diagnostics.
+    #[serde(default)]
+    pub readsb_json: Option<std::path::PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -164,10 +168,7 @@ impl Config {
         }
         let with_uuid = self.feeds.iter().filter(|f| f.uuid.is_some()).count();
         if with_uuid != 0 && with_uuid != self.feeds.len() {
-            p.push(
-                "some feeds have a uuid and some do not: give every feed one, or none."
-                    .into(),
-            );
+            p.push("some feeds have a uuid and some do not: give every feed one, or none.".into());
         }
         if let Some(r) = &self.results.beast_connect {
             if !r.contains(':') {
