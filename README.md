@@ -19,19 +19,29 @@ action. The MLAT rules triangulate: one server rejecting the station
 is that server's problem, every server rejecting it means the
 station's own position or clock is wrong.
 
+Setup happens in a browser. Started with no configuration file,
+stationd serves a wizard on the LAN (the terminal prints the URL and a
+QR code): name, antenna position clicked on a map (ground elevation
+fills in from the position), frame source, and an aggregator list —
+FlightPortrait, adsb.lol, adsb.fi, adsb.win, or anywhere else. On
+submit the same validation sentences run, station.toml is written, and
+the process continues into normal operation; the same URL becomes the
+status page. `stationd --init` is the terminal equivalent for SSH.
+
 Status: v0, private. Visual design and the diagnostic wording await
-the founder pass; the setup flow comes next.
+the founder pass.
 
 ## Run
 
 ```sh
 cargo build --release
-./target/release/stationd --config station.toml
+./target/release/stationd --config station.toml   # no file → setup mode
 curl http://127.0.0.1:8654/status.json
 ```
 
 `station.example.toml` documents every field. `--check` validates the
-configuration and exits.
+configuration and exits. Leaflet (BSD-2) is vendored in `src/vendor/`;
+map tiles come from openstreetmap.org in the viewer's browser.
 
 ## Design rules
 

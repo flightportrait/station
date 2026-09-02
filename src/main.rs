@@ -9,6 +9,7 @@ mod config;
 mod diagnose;
 mod init;
 mod model;
+mod setup;
 mod status;
 mod supervise;
 
@@ -38,6 +39,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     if cli.init {
         return init::run(&cli.config);
+    }
+    // No configuration file at all is not an error: it means first run.
+    // The browser wizard writes one, and this process carries on with it.
+    if !cli.check && !cli.config.exists() {
+        setup::serve(&cli.config).await?;
     }
     let text = std::fs::read_to_string(&cli.config)
         .with_context(|| format!("cannot read {}", cli.config.display()))?;

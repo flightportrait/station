@@ -58,10 +58,12 @@ fi
 # --- configuration -----------------------------------------------------
 if [ -f "$HOME_DIR/station.toml" ]; then
     echo "configuration: station.toml exists, keeping it"
+    "$HOME_DIR/stationd" --check --config "$HOME_DIR/station.toml"
 else
-    "$HOME_DIR/stationd" --init --config "$HOME_DIR/station.toml"
+    # None yet: the service starts in setup mode and serves a browser
+    # wizard on the LAN. (stationd --init is the terminal alternative.)
+    NEEDS_SETUP=1
 fi
-"$HOME_DIR/stationd" --check --config "$HOME_DIR/station.toml"
 
 # --- service -----------------------------------------------------------
 echo "service: installing the systemd unit (sudo writes it)"
@@ -90,5 +92,11 @@ sudo systemctl enable --now stationd
 sleep 2
 sudo systemctl --no-pager --lines 0 status stationd | head -3
 echo
-echo "Done. The station's page: http://$(hostname).local:8654/"
-echo "(or this machine's IP, port 8654)"
+if [ "${NEEDS_SETUP:-0}" = "1" ]; then
+    echo "Done. Finish setup in a browser on this network:"
+    echo "  http://$(hostname).local:8654/  (or this machine's IP, port 8654)"
+    echo "The same address becomes the station's status page afterwards."
+else
+    echo "Done. The station's page: http://$(hostname).local:8654/"
+    echo "(or this machine's IP, port 8654)"
+fi

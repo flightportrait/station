@@ -8,57 +8,65 @@
 
 use std::io::{BufRead, IsTerminal, Write};
 
-struct Aggregator {
-    name: &'static str,
-    adsb: Option<&'static str>,
-    mlat: Option<&'static str>,
-    note: &'static str,
+pub struct Aggregator {
+    pub name: &'static str,
+    pub adsb: Option<&'static str>,
+    pub mlat: Option<&'static str>,
+    pub note: &'static str,
+    /// What the feeder gets back — the other half of the pitch.
+    pub gives: &'static str,
 }
 
 /// Aggregators on offer. Feeding is non-exclusive; pick any.
-const CATALOG: &[Aggregator] = &[
+pub const CATALOG: &[Aggregator] = &[
     Aggregator {
         name: "FlightPortrait",
         adsb: Some("feed.flightportrait.com:30004"),
         mlat: None,
         note: "ours — powers the art frames; MLAT when our solver goes public",
+        gives: "your sky becomes daily posters on FlightPortrait frames",
     },
     Aggregator {
         name: "adsb.lol",
         adsb: Some("in.adsb.lol:30004"),
         mlat: Some("in.adsb.lol:31090"),
         note: "open data, no account needed",
+        gives: "a public map and a free API of what you feed",
     },
     Aggregator {
         name: "adsb.fi",
         adsb: Some("feed.adsb.fi:30004"),
         mlat: Some("feed.adsb.fi:31090"),
         note: "open data, no account needed",
+        gives: "a public map and a free API of what you feed",
     },
     Aggregator {
         name: "adsb.win",
         adsb: Some("feed.adsb.win:30004"),
         mlat: Some("mlat.adsb.win:31090"),
         note: "open data, no account needed",
+        gives: "a public map; UK-centred community",
     },
 ];
 
-struct FeedChoice {
-    name: String,
-    adsb: Option<String>,
-    mlat: Option<String>,
-    uuid: String,
+pub struct FeedChoice {
+    pub name: String,
+    pub adsb: Option<String>,
+    pub mlat: Option<String>,
+    pub uuid: String,
 }
 
-struct Answers {
-    name: String,
-    lat: f64,
-    lon: f64,
-    alt: String,
-    input_beast: String,
-    readsb_json: Option<String>,
-    readsb_prog: Option<String>,
-    feeds: Vec<FeedChoice>,
+pub struct Answers {
+    pub name: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub alt: String,
+    pub input_beast: String,
+    pub readsb_json: Option<String>,
+    pub readsb_prog: Option<String>,
+    pub feeds: Vec<FeedChoice>,
+    /// Status listen address to write; None keeps the config default.
+    pub listen: Option<String>,
 }
 
 pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
@@ -95,7 +103,7 @@ fn default_station_name() -> String {
         .unwrap_or_default()
 }
 
-fn readsb_program(readsb_path: &str, json_dir: &str, lat: f64, lon: f64) -> String {
+pub fn readsb_program(readsb_path: &str, json_dir: &str, lat: f64, lon: f64) -> String {
     format!(
         "{readsb_path} --device-type rtlsdr --gain auto --quiet \
          --net --net-bo-port 30005 --write-json {json_dir} \
@@ -104,26 +112,32 @@ fn readsb_program(readsb_path: &str, json_dir: &str, lat: f64, lon: f64) -> Stri
 }
 
 /// Uniform per-feed post-processing: drop ADS-B destinations the station
-/// cannot serve (no local readsb), telling the user what to do instead;
-/// drop feeds left with nothing.
-fn resolve_feeds(mut feeds: Vec<FeedChoice>, local_readsb: bool) -> Vec<FeedChoice> {
+/// cannot serve (no local readsb), saying what to do instead; drop feeds
+/// left with nothing. Returns the surviving feeds and the explanations.
+pub fn resolve_feeds(
+    mut feeds: Vec<FeedChoice>,
+    local_readsb: bool,
+) -> (Vec<FeedChoice>, Vec<String>) {
+    let mut notes = Vec::new();
     if !local_readsb {
         for f in &mut feeds {
             if let Some(dest) = f.adsb.take() {
                 let (host, port) = dest.rsplit_once(':').unwrap_or((dest.as_str(), "30004"));
-                println!(
-                    "  note: {} takes ADS-B from readsb, and yours runs elsewhere.",
+                notes.push(format!(
+                    "{} takes ADS-B from readsb, and yours runs elsewhere. Add this \
+                     to that readsb instead:  --net-connector \
+                     {host},{port},beast_reduce_plus_out",
                     f.name
-                );
-                println!(
-                    "        Add this to that readsb instead:  --net-connector {host},{port},beast_reduce_plus_out"
-                );
+                ));
             }
         }
     }
     feeds.retain(|f| {
         if f.adsb.is_none() && f.mlat.is_none() {
-            println!("  {} skipped: nothing this station could send it.", f.name);
+            notes.push(format!(
+                "{} skipped: nothing this station could send it.",
+                f.name
+            ));
             false
         } else {
             true
@@ -137,7 +151,7 @@ fn resolve_feeds(mut feeds: Vec<FeedChoice>, local_readsb: bool) -> Vec<FeedChoi
             }
         }
     }
-    feeds
+    (feeds, notes)
 }
 
 // --- terminal flow ------------------------------------------------------
@@ -274,7 +288,10 @@ fn gather_fancy() -> anyhow::Result<Option<Answers>> {
         }
     }
 
-    let feeds = resolve_feeds(feeds, readsb_prog.is_some());
+    let (feeds, notes) = resolve_feeds(feeds, readsb_prog.is_some());
+    for n in &notes {
+        println!("  note: {n}");
+    }
     if feeds.is_empty() {
         println!("No usable feeds; nothing to set up.");
         return Ok(None);
@@ -289,6 +306,7 @@ fn gather_fancy() -> anyhow::Result<Option<Answers>> {
         readsb_json,
         readsb_prog,
         feeds,
+        listen: None,
     };
     print_summary(&a);
     if !Confirm::with_theme(&th)
@@ -476,7 +494,10 @@ fn gather_plain() -> anyhow::Result<Option<Answers>> {
         });
     }
 
-    let feeds = resolve_feeds(feeds, readsb_prog.is_some());
+    let (feeds, notes) = resolve_feeds(feeds, readsb_prog.is_some());
+    for n in &notes {
+        println!("  note: {n}");
+    }
     if feeds.is_empty() {
         println!("No usable feeds; nothing to set up.");
         return Ok(None);
@@ -491,6 +512,7 @@ fn gather_plain() -> anyhow::Result<Option<Answers>> {
         readsb_json,
         readsb_prog,
         feeds,
+        listen: None,
     };
     print_summary(&a);
     let go = ask("Write this configuration", "yes");
@@ -523,7 +545,8 @@ fn print_summary(a: &Answers) {
     }
 }
 
-fn write_config(config_path: &std::path::Path, a: &Answers) -> anyhow::Result<()> {
+/// The station.toml a set of answers means, byte for byte.
+pub fn render_toml(a: &Answers) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "[station]\nname = \"{}\"\nlat = {}\nlon = {}\nalt = \"{}\"\n\n[input]\nbeast = \"{}\"\n",
@@ -544,12 +567,25 @@ fn write_config(config_path: &std::path::Path, a: &Answers) -> anyhow::Result<()
             out.push_str(&format!("uuid = \"{}\"\n", f.uuid));
         }
     }
+    if let Some(l) = &a.listen {
+        out.push_str(&format!("\n[status]\nlisten = \"{l}\"\n"));
+    }
     if let Some(r) = &a.readsb_prog {
         out.push_str(&format!("\n[programs]\nreadsb = \"{r}\"\n"));
     }
+    out
+}
 
-    let cfg: crate::config::Config = toml::from_str(&out)?;
-    let problems = cfg.problems();
+/// Validation problems in a rendered configuration (a parse failure is
+/// an error — the renderer produced garbage, which is a bug here).
+pub fn check_rendered(out: &str) -> anyhow::Result<Vec<String>> {
+    let cfg: crate::config::Config = toml::from_str(out)?;
+    Ok(cfg.problems())
+}
+
+fn write_config(config_path: &std::path::Path, a: &Answers) -> anyhow::Result<()> {
+    let out = render_toml(a);
+    let problems = check_rendered(&out)?;
     if !problems.is_empty() {
         for p in &problems {
             eprintln!("  - {p}");
@@ -577,7 +613,7 @@ fn write_config(config_path: &std::path::Path, a: &Answers) -> anyhow::Result<()
 
 /// An RTL-SDR on the USB bus, detected without any tooling: the known
 /// vendor:product pairs in sysfs.
-fn detect_rtlsdr() -> bool {
+pub fn detect_rtlsdr() -> bool {
     let Ok(dir) = std::fs::read_dir("/sys/bus/usb/devices") else {
         return false;
     };
@@ -593,7 +629,7 @@ fn detect_rtlsdr() -> bool {
 }
 
 /// Random UUID-shaped identifier from the system generator.
-fn pseudo_uuid() -> String {
+pub fn pseudo_uuid() -> String {
     let mut b = [0u8; 16];
     if std::fs::File::open("/dev/urandom")
         .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut b))
