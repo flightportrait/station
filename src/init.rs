@@ -15,6 +15,8 @@ pub struct Aggregator {
     pub note: &'static str,
     /// What the feeder gets back — the other half of the pitch.
     pub gives: &'static str,
+    /// The aggregator's own site, for the setup page's card link.
+    pub url: &'static str,
 }
 
 /// Aggregators on offer. Feeding is non-exclusive; pick any.
@@ -25,6 +27,7 @@ pub const CATALOG: &[Aggregator] = &[
         mlat: None,
         note: "ours — powers the art frames; MLAT when our solver goes public",
         gives: "your sky becomes daily posters on FlightPortrait frames",
+        url: "https://flightportrait.com",
     },
     Aggregator {
         name: "adsb.lol",
@@ -32,6 +35,7 @@ pub const CATALOG: &[Aggregator] = &[
         mlat: Some("in.adsb.lol:31090"),
         note: "open data, no account needed",
         gives: "a public map and a free API of what you feed",
+        url: "https://adsb.lol",
     },
     Aggregator {
         name: "adsb.fi",
@@ -39,6 +43,7 @@ pub const CATALOG: &[Aggregator] = &[
         mlat: Some("feed.adsb.fi:31090"),
         note: "open data, no account needed",
         gives: "a public map and a free API of what you feed",
+        url: "https://adsb.fi",
     },
     Aggregator {
         name: "adsb.win",
@@ -46,6 +51,7 @@ pub const CATALOG: &[Aggregator] = &[
         mlat: Some("mlat.adsb.win:31090"),
         note: "open data, no account needed",
         gives: "a public map; UK-centred community",
+        url: "https://adsb.win",
     },
 ];
 

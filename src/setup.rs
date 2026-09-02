@@ -128,7 +128,7 @@ fn info_json() -> String {
         "sdr": init::detect_rtlsdr(),
         "catalog": init::CATALOG.iter().map(|a| serde_json::json!({
             "name": a.name, "adsb": a.adsb, "mlat": a.mlat,
-            "note": a.note, "gives": a.gives,
+            "note": a.note, "gives": a.gives, "url": a.url,
         })).collect::<Vec<_>>(),
     })
     .to_string()
@@ -348,14 +348,15 @@ const SETUP_PAGE: &str = r##"<!doctype html>
   .ghost{font:inherit;background:transparent;border:1px solid var(--line);
     border-radius:6px;padding:8px 16px;color:var(--ink);cursor:pointer}
   .ghost:hover{border-color:var(--ink)}
+  .linky{background:none;border:0;font:inherit;color:var(--red);
+    cursor:pointer;padding:0;text-decoration:underline}
 
   .actions{margin-top:30px;display:flex;align-items:center;gap:20px}
   .cta{display:inline-block;background:var(--ink);color:var(--paper);border:0;
     padding:14px 28px;font-family:'Helvetica Neue',Arial,sans-serif;
-    font-size:13px;letter-spacing:.1em;cursor:pointer;border-radius:0}
+    font-size:13px;letter-spacing:.1em;cursor:pointer;border-radius:0;
+    text-decoration:none}
   .cta:hover{background:var(--red)}
-  .cta:disabled{opacity:.5;cursor:default}
-  .cta:disabled:hover{background:var(--ink)}
   .back{background:none;border:0;font:inherit;color:var(--quiet);
     cursor:pointer;padding:0}
   .back:hover{color:var(--ink)}
@@ -366,18 +367,29 @@ const SETUP_PAGE: &str = r##"<!doctype html>
     background:var(--card);padding:16px 18px;margin:10px 0;cursor:pointer}
   .opt:hover{border-color:var(--quiet)}
   .opt.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
-  .opt .t{display:flex;align-items:baseline;gap:10px}
+  .opt .t{display:flex;align-items:center;gap:10px}
   .opt .mark{color:var(--red);visibility:hidden}
   .opt.on .mark{visibility:visible}
-  .opt .gives{color:var(--quiet);font-size:15px;display:block;margin-top:2px}
-  .opt input{display:none}
+  .opt .gives{color:var(--quiet);font-size:15px;display:block;margin-top:4px}
+  .opt input[type=radio],.opt input[type=checkbox]{display:none}
+  .tile{width:28px;height:28px;border-radius:6px;display:inline-flex;flex:none;
+    align-items:center;justify-content:center;color:#F5F1E6;
+    font-family:'Helvetica Neue',Arial,sans-serif;font-size:14px}
+  .tile svg{width:28px;height:28px;display:block}
+  .ext{margin-left:auto;color:var(--red);font-size:14px;text-decoration:none;flex:none}
+  .ext:hover{text-decoration:underline}
   .keyfield{margin-top:10px;display:none}
   .showkeys .opt.on .keyfield{display:block}
-  #remotebox{margin:6px 0 0 0;display:none}
+  #customfields{margin-top:10px;display:grid;gap:8px}
+  #customfields[hidden]{display:none}
   label.small{display:flex;gap:8px;align-items:center;color:var(--quiet);
     margin-top:14px;cursor:pointer;font-size:15px}
+  .finehint{color:var(--quiet);font-size:14px;margin-top:6px;max-width:52ch}
 
   .fieldlbl{display:block;margin-bottom:2px;color:var(--quiet);font-size:14px}
+  .groundline{margin-bottom:20px}
+  .groundline b{font-weight:600}
+  #groundrow{margin-bottom:20px}
   #alttotal{margin-top:14px;color:var(--quiet)}
   #summary p{margin-bottom:8px}
   #problems div{border-left:3px solid var(--red);background:rgba(184,64,46,.07);
@@ -385,11 +397,12 @@ const SETUP_PAGE: &str = r##"<!doctype html>
   #notes div,#notes7 div{border-left:3px solid var(--yellow);background:rgba(217,165,28,.09);
     padding:.45rem .9rem;margin:.6rem 0;font-size:15px}
   #notes7{text-align:left;max-width:560px;margin:0 auto 8px}
-  #done a{color:var(--red)}
   .bigmark{width:56px;height:56px;margin-bottom:26px}
   .center{text-align:center}
   .center .sub{margin-left:auto;margin-right:auto}
   .center .actions{justify-content:center}
+  #livecount{font-size:52px;line-height:1.1;margin:10px 0 2px}
+  #livelbl{color:var(--quiet);font-size:15px;margin-bottom:8px}
 </style>
 
 <div id="bar"></div>
@@ -441,14 +454,17 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 
 <section class="step" data-step="3" hidden>
   <p class="kicker caps">3 · Altitude</p>
-  <h1>How high does it sit?</h1>
-  <p class="sub">Ground elevation filled in from the position;
-  add how far above the ground the antenna is.</p>
-  <div class="row">
-    <div><span class="fieldlbl">ground elevation (m)</span>
-      <input type="number" id="ground" step="any" placeholder="—"></div>
-    <div><span class="fieldlbl">antenna above ground (m)</span>
-      <input type="number" id="mast" step="any" value="5"></div>
+  <h1>How high is the antenna?</h1>
+  <p class="sub">Just the part you know — how far above the ground it sits.
+  The ground's own elevation comes from the position.</p>
+  <p id="groundline" class="groundline">Looking up the ground elevation…</p>
+  <div id="groundrow" hidden>
+    <span class="fieldlbl">ground elevation (m)</span>
+    <input type="number" id="ground" step="any" placeholder="—">
+  </div>
+  <div>
+    <span class="fieldlbl">antenna above the ground (m)</span>
+    <input type="number" id="mast" step="any" value="5">
   </div>
   <p id="alttotal"></p>
   <div class="actions">
@@ -459,19 +475,20 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 </section>
 
 <section class="step" data-step="4" hidden>
-  <p class="kicker caps">4 · Signal</p>
-  <h1>Where do Mode S frames come from?</h1>
-  <p class="sub">The station needs one source of raw receiver frames.</p>
-  <label class="opt" id="optsdr"><input type="radio" name="mode" value="sdr">
-    <span class="t"><span class="mark">✓</span><span id="sdrlabel">This machine's SDR dongle</span></span>
-    <span class="gives" id="sdrgives">stationd runs readsb for it</span>
-  </label>
-  <label class="opt" id="optremote"><input type="radio" name="mode" value="remote">
-    <span class="t"><span class="mark">✓</span><span>A readsb already running somewhere</span></span>
-    <span class="gives">the host and port of its Beast output</span>
-    <div id="remotebox"><input type="text" id="beast"
+  <p class="kicker caps">4 · Receiver</p>
+  <h1>Your receiver.</h1>
+  <p class="sub">A station listens to aircraft with a small USB radio —
+  an RTL-SDR dongle — plugged into this machine and wired to an antenna.</p>
+  <div class="opt" id="optsdr">
+    <span class="t"><span class="mark">✓</span><b id="sdrtitle">Looking for an RTL-SDR dongle…</b></span>
+    <span class="gives" id="sdrgives">none found yet — plug one in; this page notices by itself</span>
+  </div>
+  <div class="opt" id="optremote">
+    <span class="t"><span class="mark">✓</span><b>My receiver runs on another machine</b></span>
+    <span class="gives">unusual — a readsb already runs elsewhere; enter its Beast output</span>
+    <div id="remotebox" style="display:none;margin-top:10px"><input type="text" id="beast"
       placeholder="192.168.1.10:30005" autocomplete="off"></div>
-  </label>
+  </div>
   <div class="actions">
     <button class="cta" data-next>CONTINUE</button>
     <span class="enter">press Enter ↵</span>
@@ -482,10 +499,25 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 <section class="step" data-step="5" hidden>
   <p class="kicker caps">5 · Feeding</p>
   <h1>Who should hear about your sky?</h1>
-  <p class="sub">Non-exclusive — feeding one costs the others nothing.</p>
+  <p class="sub">Aggregators combine thousands of stations into one live picture
+  of the sky. Feeding is free and non-exclusive — sending to one costs the
+  others nothing.</p>
   <div id="feeds"></div>
+  <div class="opt" id="customcard">
+    <span class="t"><span class="tile" style="background:var(--line);color:var(--ink)">+</span><b>Somewhere else</b></span>
+    <span class="gives">any other network that takes Beast or mlat-client connections</span>
+    <div id="customfields" hidden>
+      <input type="text" id="cname" placeholder="name" autocomplete="off">
+      <input type="text" id="cmlat" placeholder="MLAT server host:port (optional)" autocomplete="off">
+      <input type="text" id="cadsb" placeholder="ADS-B destination host:port (optional)" autocomplete="off">
+      <input type="text" id="ckey" placeholder="station key (optional)" autocomplete="off">
+    </div>
+  </div>
   <label class="small"><input type="checkbox" id="havekeys">
-    I have station keys from an aggregator</label>
+    I have a station key from one of these</label>
+  <p class="finehint">Some networks tie a station to an account with a key
+  (a UUID from their site — see each card's link). Without one you feed
+  anonymously, which works fine.</p>
   <div class="actions">
     <button class="cta" data-next>CONTINUE</button>
     <span class="enter">press Enter ↵</span>
@@ -507,9 +539,12 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 
 <section class="step center" data-step="7" hidden>
   <svg class="bigmark" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#221f1a"/><path d="M10.5 36Q9 35 10.74 34.54L27.13 30.23Q28 30 28.42 29.21L35.58 15.79Q36 15 36.88 15.18L40.12 15.82Q41 16 40.75 16.87L37.25 29.13Q37 30 37.87 30.25L51 34C54 35 55 37 54.3 38.4Q54 39 53 38.94L36.9 38.05Q36 38 35.46 38.72L27.54 49.28Q27 50 26.13 49.78L23.87 49.22Q23 49 23.35 48.17L27.65 37.83Q28 37 27.11 37.14L15.89 38.86Q15 39 14.25 38.5Z" fill="#f5f1e6" transform="rotate(29 32 32)"/></svg>
-  <h1>The station is starting.</h1>
+  <h1 id="donehead">Starting the station…</h1>
+  <p class="sub" id="donesub">Writing the configuration and raising the receiver stack.</p>
+  <div id="livecount" hidden>–</div>
+  <div id="livelbl" hidden>aircraft over you right now</div>
   <div id="notes7"></div>
-  <p class="sub" id="done">Writing the configuration and raising the stack…</p>
+  <div class="actions"><a class="cta" id="openpage" href="/" hidden>OPEN THE STATION PAGE</a></div>
 </section>
 
 </div></main>
@@ -517,6 +552,7 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 <script src="/vendor/maplibre-gl.js"></script>
 <script>
 let map, pin, catalog = [], active = 0;
+let sdrFound = false, remoteChosen = false;
 const steps = [...document.querySelectorAll('.step')];
 const LAST_Q = 6;
 
@@ -531,9 +567,10 @@ function show(n, backwards) {
     void b.offsetWidth; // style flush, so removing the class transitions
     b.classList.remove('out', 'pre');
     if (n === 2) initMap();
+    if (n === 3) renderGround();
     if (n === 6) buildSummary();
     const first = b.querySelector('input[type=text],input[type=number]');
-    if (first && n !== 2) first.focus();
+    if (first && n !== 2 && n !== 4 && n !== 5) first.focus();
   }, 300);
   document.getElementById('bar').style.width =
     (n === 0 ? 0 : Math.min(n, LAST_Q) / LAST_Q * 100) + '%';
@@ -542,13 +579,14 @@ function show(n, backwards) {
 }
 
 function complain(msg) {
-  // A gentle shake-free nudge: the sub line of the active step turns red briefly.
   const sub = steps[active].querySelector('.sub');
   if (!sub) return alert(msg);
-  const old = sub.textContent;
+  if (!sub.dataset.orig) sub.dataset.orig = sub.textContent;
   sub.style.color = 'var(--red)'; sub.textContent = msg;
-  setTimeout(() => { sub.style.color = ''; sub.textContent = old; }, 2600);
+  setTimeout(() => { sub.style.color = ''; sub.textContent = sub.dataset.orig; }, 2600);
 }
+
+function mode() { return remoteChosen ? 'remote' : 'sdr'; }
 
 function validate(n) {
   if (n === 1 && !document.getElementById('name').value.trim())
@@ -558,13 +596,17 @@ function validate(n) {
     const lo = parseFloat(document.getElementById('lon').value);
     if (isNaN(la) || isNaN(lo)) return 'Click the antenna\'s spot on the map first.';
   }
-  if (n === 3 && isNaN(parseFloat(document.getElementById('ground').value)))
-    return 'Ground elevation is empty — go back to set the position, or type it.';
+  if (n === 3 && isNaN(parseFloat(document.getElementById('ground').value))) {
+    elevState = 'manual'; renderGround();
+    return 'The ground elevation is still unknown — type it in.';
+  }
   if (n === 4) {
-    if (!document.querySelector('input[name=mode]:checked'))
-      return 'Pick one of the two sources.';
-    if (modeVal() === 'remote' && !document.getElementById('beast').value.includes(':'))
-      return 'The Beast source needs host:port, like 192.168.1.10:30005.';
+    if (mode() === 'remote') {
+      if (!document.getElementById('beast').value.includes(':'))
+        return 'The Beast source needs host:port, like 192.168.1.10:30005.';
+    } else if (!sdrFound) {
+      return 'No dongle found yet — plug it in, or pick the second card.';
+    }
   }
   if (n === 5 && !pickedFeeds().length)
     return 'Pick at least one — or the station tells no one.';
@@ -585,20 +627,34 @@ document.addEventListener('keydown', e => {
   e.preventDefault(); next();
 });
 
-function modeVal() {
-  const c = document.querySelector('input[name=mode]:checked');
-  return c ? c.value : '';
-}
-function markOpts() {
-  document.getElementById('optsdr').classList.toggle('on', modeVal() === 'sdr');
-  document.getElementById('optremote').classList.toggle('on', modeVal() === 'remote');
+// ---- receiver cards ---------------------------------------------------
+function renderReceiver() {
+  document.getElementById('optsdr').classList.toggle('on', mode() === 'sdr');
+  document.getElementById('optremote').classList.toggle('on', mode() === 'remote');
   document.getElementById('remotebox').style.display =
-    modeVal() === 'remote' ? 'block' : 'none';
-  if (modeVal() === 'remote') document.getElementById('beast').focus();
+    mode() === 'remote' ? 'block' : 'none';
+  document.getElementById('sdrtitle').textContent = sdrFound
+    ? 'RTL-SDR dongle found on this machine'
+    : 'Looking for an RTL-SDR dongle…';
+  document.getElementById('sdrgives').textContent = sdrFound
+    ? 'stationd runs the radio software (readsb) for it and feeds from there'
+    : 'none found yet — plug one in; this page notices by itself';
 }
-document.querySelectorAll('input[name=mode]').forEach(r =>
-  r.addEventListener('change', markOpts));
+document.getElementById('optsdr').addEventListener('click', () => {
+  remoteChosen = false; renderReceiver();
+});
+document.getElementById('optremote').addEventListener('click', e => {
+  remoteChosen = true; renderReceiver();
+  if (e.target.id !== 'beast') document.getElementById('beast').focus();
+});
+setInterval(() => {
+  fetch('/setup/info').then(r => r.json()).then(d => {
+    if (d.sdr !== sdrFound) { sdrFound = d.sdr; renderReceiver(); }
+  }).catch(() => {});
+}, 3000);
 
+// ---- position ---------------------------------------------------------
+let elevState = 'pending';
 function setPos(lat, lon, zoomTo) {
   lat = +lat.toFixed(6); lon = +lon.toFixed(6);
   document.getElementById('lat').value = lat;
@@ -612,13 +668,15 @@ function setPos(lat, lon, zoomTo) {
     } else pin.setLngLat([lon, lat]);
     if (zoomTo) map.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 15) });
   }
+  elevState = 'pending';
   fetch('https://api.open-meteo.com/v1/elevation?latitude='+lat+'&longitude='+lon)
     .then(r => r.json()).then(d => {
       if (d.elevation && d.elevation.length) {
         document.getElementById('ground').value = Math.round(d.elevation[0]);
-        altTotal();
-      }
-    }).catch(() => {});
+        elevState = 'ok';
+      } else { elevState = 'failed'; }
+      renderGround(); altTotal();
+    }).catch(() => { elevState = 'failed'; renderGround(); });
 }
 
 // ---- paper skin -------------------------------------------------------
@@ -717,6 +775,29 @@ function initMap() {
   });
 }
 
+// ---- altitude ---------------------------------------------------------
+function renderGround() {
+  const line = document.getElementById('groundline');
+  const row = document.getElementById('groundrow');
+  const v = document.getElementById('ground').value;
+  if (elevState === 'ok' && v !== '') {
+    line.hidden = false; row.hidden = true;
+    line.innerHTML = '';
+    line.append('The ground there is about ');
+    const b = document.createElement('b'); b.textContent = v; line.append(b);
+    line.append(' m above sea level. ');
+    const fix = document.createElement('button');
+    fix.className = 'linky'; fix.type = 'button'; fix.textContent = 'Not right?';
+    fix.onclick = () => { elevState = 'manual'; renderGround(); };
+    line.append(fix);
+  } else if (elevState === 'pending') {
+    line.hidden = false; row.hidden = true;
+    line.textContent = 'Looking up the ground elevation…';
+  } else {
+    line.hidden = true; row.hidden = false;
+  }
+  altTotal();
+}
 function altTotal() {
   const g = parseFloat(document.getElementById('ground').value);
   const m = parseFloat(document.getElementById('mast').value);
@@ -739,8 +820,17 @@ if (window.isSecureContext && navigator.geolocation) {
     () => { b.textContent = 'Location unavailable — click the map'; });
 }
 
+// ---- feeds ------------------------------------------------------------
 document.getElementById('havekeys').addEventListener('change', e =>
   document.getElementById('feeds').classList.toggle('showkeys', e.target.checked));
+
+const FPMARK = '<svg viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#221f1a"/><path d="M10.5 36Q9 35 10.74 34.54L27.13 30.23Q28 30 28.42 29.21L35.58 15.79Q36 15 36.88 15.18L40.12 15.82Q41 16 40.75 16.87L37.25 29.13Q37 30 37.87 30.25L51 34C54 35 55 37 54.3 38.4Q54 39 53 38.94L36.9 38.05Q36 38 35.46 38.72L27.54 49.28Q27 50 26.13 49.78L23.87 49.22Q23 49 23.35 48.17L27.65 37.83Q28 37 27.11 37.14L15.89 38.86Q15 39 14.25 38.5Z" fill="#f5f1e6" transform="rotate(29 32 32)"/></svg>';
+const TILECOLORS = ['var(--blue)', 'var(--green)', 'var(--yellow)', 'var(--red)'];
+function tileFor(a, i) {
+  if (a.name === 'FlightPortrait') return '<span class="tile">' + FPMARK + '</span>';
+  const letter = a.name.replace(/^adsb\./, '').charAt(0).toUpperCase();
+  return '<span class="tile" style="background:' + TILECOLORS[i % TILECOLORS.length] + '">' + letter + '</span>';
+}
 
 function pickedFeeds() {
   const out = [];
@@ -750,21 +840,36 @@ function pickedFeeds() {
     out.push({ name: a.name, adsb: a.adsb, mlat: a.mlat,
       uuid: (document.getElementById('key' + c.dataset.i) || {value:''}).value.trim() });
   });
+  if (document.getElementById('customcard').classList.contains('on')) {
+    const name = document.getElementById('cname').value.trim();
+    const cm = document.getElementById('cmlat').value.trim();
+    const ca = document.getElementById('cadsb').value.trim();
+    if (name && (cm || ca))
+      out.push({ name, adsb: ca || null, mlat: cm || null,
+        uuid: document.getElementById('ckey').value.trim() });
+  }
   return out;
 }
+document.getElementById('customcard').addEventListener('click', e => {
+  if (e.target.closest('#customfields')) return;
+  const card = document.getElementById('customcard');
+  card.classList.toggle('on');
+  document.getElementById('customfields').hidden = !card.classList.contains('on');
+  if (card.classList.contains('on')) document.getElementById('cname').focus();
+});
 
 fetch('/setup/info').then(r => r.json()).then(d => {
   catalog = d.catalog;
+  sdrFound = d.sdr;
+  remoteChosen = false;
+  renderReceiver();
   if (d.hostname && !document.getElementById('name').value)
     document.getElementById('name').value = d.hostname;
-  if (d.sdr) document.getElementById('sdrgives').textContent =
-    'one is plugged in right now — stationd runs readsb for it';
-  document.querySelector('input[name=mode][value=' + (d.sdr ? 'sdr' : 'remote') + ']').checked = true;
-  markOpts();
   document.getElementById('feeds').innerHTML = d.catalog.map((a, i) => {
     const what = a.adsb && a.mlat ? 'ADS-B + MLAT' : (a.adsb ? 'ADS-B' : 'MLAT');
     return '<label class="opt on"><input type="checkbox" data-i="'+i+'" checked>'
-      + '<span class="t"><span class="mark">✓</span><b>'+a.name+'</b></span>'
+      + '<span class="t">' + tileFor(a, i) + '<b>'+a.name+'</b>'
+      + '<a class="ext" href="'+a.url+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">site ↗</a></span>'
       + '<span class="gives">'+what+' — '+a.gives+'</span>'
       + '<div class="keyfield"><input type="text" id="key'+i+'" placeholder="station key for '+a.name+'" autocomplete="off"></div></label>';
   }).join('');
@@ -773,11 +878,12 @@ fetch('/setup/info').then(r => r.json()).then(d => {
       c.closest('.opt').classList.toggle('on', c.checked)));
 });
 
+// ---- review + submit --------------------------------------------------
 function buildSummary() {
   const g = parseFloat(document.getElementById('ground').value);
   const m = parseFloat(document.getElementById('mast').value);
   const feeds = pickedFeeds();
-  const src = modeVal() === 'sdr' ? "this machine's SDR"
+  const src = mode() === 'sdr' ? 'the SDR dongle on this machine'
     : document.getElementById('beast').value.trim();
   document.getElementById('summary').innerHTML = '';
   const p = (t) => { const e = document.createElement('p');
@@ -797,7 +903,7 @@ document.getElementById('go').onclick = async () => {
     lat: parseFloat(document.getElementById('lat').value),
     lon: parseFloat(document.getElementById('lon').value),
     alt_m: (isNaN(g) ? 0 : g) + (isNaN(m) ? 0 : m),
-    input: { mode: modeVal(), beast: document.getElementById('beast').value.trim() },
+    input: { mode: mode(), beast: document.getElementById('beast').value.trim() },
     feeds: pickedFeeds(),
   };
   let d;
@@ -807,21 +913,19 @@ document.getElementById('go').onclick = async () => {
   if (!d.ok) return showProblems(d.problems || [], d.notes || []);
   fill('notes7', d.notes || []);
   show(7, false);
-  const notes = d.notes || [];
-  const done = document.getElementById('done');
   const poll = setInterval(async () => {
     try {
       const s = await (await fetch('/status.json')).json();
       if (!s.station) return;
-      clearInterval(poll);
-      if (notes.length) {
-        done.innerHTML = '';
-        done.append('It is up. Read the notes above, then ');
-        const a = document.createElement('a');
-        a.href = '/'; a.textContent = 'open its page';
-        done.append(a); done.append('.');
-      } else {
-        location.href = '/';
+      document.getElementById('donehead').textContent = 'Your station is live.';
+      document.getElementById('donesub').textContent =
+        'It kept your answers, started the receiver stack, and is feeding.';
+      document.getElementById('openpage').hidden = false;
+      const n = s.receiver && s.receiver.configured ? s.receiver.aircraft : null;
+      if (n != null) {
+        document.getElementById('livecount').hidden = false;
+        document.getElementById('livelbl').hidden = false;
+        document.getElementById('livecount').textContent = n;
       }
     } catch (e) {}
   }, 2000);
