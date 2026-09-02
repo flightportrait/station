@@ -40,8 +40,10 @@ curl http://127.0.0.1:8654/status.json
 ```
 
 `station.example.toml` documents every field. `--check` validates the
-configuration and exits. Leaflet (BSD-2) is vendored in `src/vendor/`;
-map tiles come from openstreetmap.org in the viewer's browser.
+configuration and exits. MapLibre GL (BSD-3) is vendored in `src/vendor/`;
+the position map is the network page's paper-skinned OpenFreemap basemap
+(`paperify()` mirrored from `site/network/index.html` — change both
+together).
 
 ## Design rules
 

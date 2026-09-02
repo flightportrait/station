@@ -15,8 +15,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 const LISTEN: &str = "0.0.0.0:8654";
-const LEAFLET_JS: &str = include_str!("vendor/leaflet.js");
-const LEAFLET_CSS: &str = include_str!("vendor/leaflet.css");
+const MAPLIBRE_JS: &str = include_str!("vendor/maplibre-gl.js");
+const MAPLIBRE_CSS: &str = include_str!("vendor/maplibre-gl.css");
 
 /// Serve the wizard until a valid configuration is written, then return.
 pub async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
@@ -53,11 +53,11 @@ fn route(
     if head.starts_with("GET / ") {
         return (ok, "text/html; charset=utf-8", SETUP_PAGE.into(), false);
     }
-    if head.starts_with("GET /vendor/leaflet.js") {
-        return (ok, "application/javascript", LEAFLET_JS.into(), false);
+    if head.starts_with("GET /vendor/maplibre-gl.js") {
+        return (ok, "application/javascript", MAPLIBRE_JS.into(), false);
     }
-    if head.starts_with("GET /vendor/leaflet.css") {
-        return (ok, "text/css", LEAFLET_CSS.into(), false);
+    if head.starts_with("GET /vendor/maplibre-gl.css") {
+        return (ok, "text/css", MAPLIBRE_CSS.into(), false);
     }
     if head.starts_with("GET /setup/info") {
         return (ok, "application/json", info_json(), false);
@@ -295,99 +295,322 @@ fn qr_lines(text: &str) -> Vec<String> {
 const SETUP_PAGE: &str = r##"<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Station setup</title>
-<link rel="stylesheet" href="/vendor/leaflet.css">
+<title>Station setup — FlightPortrait</title>
+<link rel="stylesheet" href="/vendor/maplibre-gl.css">
 <style>
-  body { font: 16px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 44rem; padding: 0 1rem; }
-  h1 { font-size: 1.3rem; margin: 0 0 .3rem; }
-  .sub { color: #666; margin: 0 0 1.5rem; }
-  section { margin: 1.6rem 0; }
-  h2 { font-size: 1rem; margin: 0 0 .4rem; }
-  .hint { color: #666; font-size: .88rem; margin: .2rem 0 .6rem; }
-  input[type=text], input[type=number] { font: inherit; padding: .35rem .5rem; border: 1px solid #bbb; border-radius: 4px; width: 100%; box-sizing: border-box; }
-  .row { display: flex; gap: .6rem; }
-  .row > * { flex: 1; }
-  #map { height: 320px; border: 1px solid #ccc; border-radius: 6px; margin: .5rem 0; }
-  .pin { width: 14px; height: 14px; background: #c33; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 4px rgba(0,0,0,.5); }
-  button { font: inherit; padding: .45rem .9rem; border: 1px solid #999; border-radius: 6px; background: #f5f5f5; cursor: pointer; }
-  button.primary { background: #1a63c9; border-color: #1a63c9; color: #fff; font-weight: 600; padding: .6rem 1.4rem; }
-  label.feed { display: block; padding: .5rem .7rem; border: 1px solid #ddd; border-radius: 6px; margin: .4rem 0; cursor: pointer; }
-  label.feed b { font-weight: 600; }
-  label.feed .gives { color: #666; font-size: .86rem; display: block; margin-left: 1.55rem; }
-  label.opt { display: block; margin: .3rem 0; }
-  #problems { margin: 1rem 0; }
-  #problems div { border-left: 3px solid #c33; padding: .4rem .8rem; margin: .5rem 0; background: #fee; }
-  #notes div { border-left: 3px solid #c90; padding: .4rem .8rem; margin: .5rem 0; background: #fec; font-size: .92rem; }
-  #done { border-left: 3px solid #2a7; padding: .6rem .8rem; background: #efe; }
-  .keyfield { margin: .2rem 0 .2rem 1.55rem; display: none; }
-  .showkeys .keyfield { display: block; }
-</style>
-<h1>Station setup</h1>
-<p class="sub">A few answers and this machine starts feeding. Everything checked before anything is written.</p>
+  :root{
+    --paper:#F5F1E6; --ink:#221F1A; --red:#B8402E;
+    --blue:#2D5C9E; --yellow:#D9A51C; --green:#3D7A50;
+    --line:rgba(34,31,26,.14); --quiet:rgba(34,31,26,.72);
+    --card:#FAF7EE;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{background:var(--paper);color:var(--ink);
+    font:17px/1.65 Palatino,'Palatino Linotype','Book Antiqua',Georgia,serif;
+    -webkit-font-smoothing:antialiased}
+  .caps{font-family:'Helvetica Neue',Arial,sans-serif;
+    font-size:13px;letter-spacing:.1em}
 
-<section>
-  <h2>1 · Name</h2>
-  <p class="hint">MLAT servers identify this station by it.</p>
-  <input type="text" id="name" placeholder="my-station">
+  #bar{position:fixed;top:0;left:0;height:3px;background:var(--ink);
+    width:0;transition:width .45s ease;z-index:9}
+  .topbar{position:fixed;top:0;left:0;right:0;height:64px;z-index:5;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:0 24px;background:var(--paper)}
+  .wordmark{display:flex;align-items:center;gap:10px;font-size:17px}
+  .wordmark svg{width:24px;height:24px;display:block}
+  .wordmark .prod{color:var(--quiet)}
+  #count{color:var(--quiet)}
+
+  main{min-height:100%;display:flex;align-items:center;justify-content:center;
+    padding:96px 24px 64px}
+  .step{max-width:640px;width:100%;
+    transition:opacity .3s ease,transform .3s ease}
+  .step.out{opacity:0;transform:translateY(-16px)}
+  .step.pre{opacity:0;transform:translateY(16px)}
+  @media (prefers-reduced-motion: reduce){
+    .step,#bar{transition:none}
+  }
+  .kicker{color:var(--red);margin-bottom:14px}
+  h1{font-size:34px;line-height:1.15;font-weight:400;margin:0 0 12px}
+  .sub{color:var(--quiet);max-width:52ch;margin-bottom:26px}
+  input[type=text],input[type=number]{font:inherit;font-size:19px;width:100%;
+    padding:10px 2px;border:0;border-bottom:1.5px solid var(--line);
+    background:transparent;color:var(--ink);border-radius:0}
+  input:focus{outline:none;border-bottom-color:var(--ink)}
+  ::placeholder{color:rgba(34,31,26,.35)}
+  .row{display:flex;gap:20px}
+  .row>*{flex:1}
+  #map{height:min(340px,44vh);border:1px solid var(--line);border-radius:6px;
+    margin:14px 0;background:var(--card)}
+  .pin{width:14px;height:14px;background:var(--red);border:2px solid var(--paper);
+    border-radius:50%;box-shadow:0 0 4px rgba(34,31,26,.5)}
+  .ghost{font:inherit;background:transparent;border:1px solid var(--line);
+    border-radius:6px;padding:8px 16px;color:var(--ink);cursor:pointer}
+  .ghost:hover{border-color:var(--ink)}
+
+  .actions{margin-top:30px;display:flex;align-items:center;gap:20px}
+  .cta{display:inline-block;background:var(--ink);color:var(--paper);border:0;
+    padding:14px 28px;font-family:'Helvetica Neue',Arial,sans-serif;
+    font-size:13px;letter-spacing:.1em;cursor:pointer;border-radius:0}
+  .cta:hover{background:var(--red)}
+  .cta:disabled{opacity:.5;cursor:default}
+  .cta:disabled:hover{background:var(--ink)}
+  .back{background:none;border:0;font:inherit;color:var(--quiet);
+    cursor:pointer;padding:0}
+  .back:hover{color:var(--ink)}
+  .enter{color:var(--quiet);font-size:14px}
+  @media (max-width:600px){.enter{display:none}}
+
+  .opt{display:block;border:1px solid var(--line);border-radius:6px;
+    background:var(--card);padding:16px 18px;margin:10px 0;cursor:pointer}
+  .opt:hover{border-color:var(--quiet)}
+  .opt.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+  .opt .t{display:flex;align-items:baseline;gap:10px}
+  .opt .mark{color:var(--red);visibility:hidden}
+  .opt.on .mark{visibility:visible}
+  .opt .gives{color:var(--quiet);font-size:15px;display:block;margin-top:2px}
+  .opt input{display:none}
+  .keyfield{margin-top:10px;display:none}
+  .showkeys .opt.on .keyfield{display:block}
+  #remotebox{margin:6px 0 0 0;display:none}
+  label.small{display:flex;gap:8px;align-items:center;color:var(--quiet);
+    margin-top:14px;cursor:pointer;font-size:15px}
+
+  .fieldlbl{display:block;margin-bottom:2px;color:var(--quiet);font-size:14px}
+  #alttotal{margin-top:14px;color:var(--quiet)}
+  #summary p{margin-bottom:8px}
+  #problems div{border-left:3px solid var(--red);background:rgba(184,64,46,.07);
+    padding:.45rem .9rem;margin:.6rem 0}
+  #notes div,#notes7 div{border-left:3px solid var(--yellow);background:rgba(217,165,28,.09);
+    padding:.45rem .9rem;margin:.6rem 0;font-size:15px}
+  #notes7{text-align:left;max-width:560px;margin:0 auto 8px}
+  #done a{color:var(--red)}
+  .bigmark{width:56px;height:56px;margin-bottom:26px}
+  .center{text-align:center}
+  .center .sub{margin-left:auto;margin-right:auto}
+  .center .actions{justify-content:center}
+</style>
+
+<div id="bar"></div>
+<div class="topbar">
+  <span class="wordmark"><svg viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#221f1a"/><path d="M10.5 36Q9 35 10.74 34.54L27.13 30.23Q28 30 28.42 29.21L35.58 15.79Q36 15 36.88 15.18L40.12 15.82Q41 16 40.75 16.87L37.25 29.13Q37 30 37.87 30.25L51 34C54 35 55 37 54.3 38.4Q54 39 53 38.94L36.9 38.05Q36 38 35.46 38.72L27.54 49.28Q27 50 26.13 49.78L23.87 49.22Q23 49 23.35 48.17L27.65 37.83Q28 37 27.11 37.14L15.89 38.86Q15 39 14.25 38.5Z" fill="#f5f1e6" transform="rotate(29 32 32)"/></svg>
+    FlightPortrait <span class="prod">· Station</span></span>
+  <span id="count" class="caps"></span>
+</div>
+
+<main><div id="stage">
+
+<section class="step center" data-step="0">
+  <svg class="bigmark" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#221f1a"/><path d="M10.5 36Q9 35 10.74 34.54L27.13 30.23Q28 30 28.42 29.21L35.58 15.79Q36 15 36.88 15.18L40.12 15.82Q41 16 40.75 16.87L37.25 29.13Q37 30 37.87 30.25L51 34C54 35 55 37 54.3 38.4Q54 39 53 38.94L36.9 38.05Q36 38 35.46 38.72L27.54 49.28Q27 50 26.13 49.78L23.87 49.22Q23 49 23.35 48.17L27.65 37.83Q28 37 27.11 37.14L15.89 38.86Q15 39 14.25 38.5Z" fill="#f5f1e6" transform="rotate(29 32 32)"/></svg>
+  <h1>Set up your station.</h1>
+  <p class="sub">A few answers and this machine starts feeding.
+  Everything is checked before anything is written.</p>
+  <div class="actions"><button class="cta" data-next>BEGIN</button></div>
 </section>
 
-<section>
-  <h2>2 · Antenna position</h2>
-  <p class="hint">Zoom in and click the antenna's spot — rooftop precision matters, because
-  MLAT places other people's aircraft with it.</p>
-  <button id="locate" hidden>Use my location</button>
+<section class="step" data-step="1" hidden>
+  <p class="kicker caps">1 · Identity</p>
+  <h1>What should this station be called?</h1>
+  <p class="sub">MLAT servers identify it by this name.</p>
+  <input type="text" id="name" placeholder="my-station" autocomplete="off">
+  <div class="actions">
+    <button class="cta" data-next>CONTINUE</button>
+    <span class="enter">press Enter ↵</span>
+    <button class="back" data-back>Back</button>
+  </div>
+</section>
+
+<section class="step" data-step="2" hidden>
+  <p class="kicker caps">2 · Position</p>
+  <h1>Where is the antenna?</h1>
+  <p class="sub">Zoom in and click its spot — rooftop precision matters,
+  because MLAT places other people's aircraft with it.
+  <button id="locate" class="ghost" hidden style="margin-left:8px">Use my location</button></p>
   <div id="map"></div>
   <div class="row">
     <input type="number" id="lat" step="any" placeholder="latitude">
     <input type="number" id="lon" step="any" placeholder="longitude">
   </div>
+  <div class="actions">
+    <button class="cta" data-next>CONTINUE</button>
+    <span class="enter">press Enter ↵</span>
+    <button class="back" data-back>Back</button>
+  </div>
 </section>
 
-<section>
-  <h2>3 · Antenna altitude</h2>
-  <p class="hint">Ground elevation fills in automatically from the position; add how high
-  the antenna sits above the ground.</p>
+<section class="step" data-step="3" hidden>
+  <p class="kicker caps">3 · Altitude</p>
+  <h1>How high does it sit?</h1>
+  <p class="sub">Ground elevation filled in from the position;
+  add how far above the ground the antenna is.</p>
   <div class="row">
-    <div><input type="number" id="ground" step="any" placeholder="ground elevation (m)"></div>
-    <div><input type="number" id="mast" step="any" placeholder="antenna above ground (m)" value="5"></div>
+    <div><span class="fieldlbl">ground elevation (m)</span>
+      <input type="number" id="ground" step="any" placeholder="—"></div>
+    <div><span class="fieldlbl">antenna above ground (m)</span>
+      <input type="number" id="mast" step="any" value="5"></div>
   </div>
-  <p class="hint" id="alttotal"></p>
-</section>
-
-<section>
-  <h2>4 · Where do Mode S frames come from?</h2>
-  <label class="opt"><input type="radio" name="mode" value="sdr" id="modesdr"> <span id="sdrlabel">This machine's SDR dongle (stationd runs readsb)</span></label>
-  <label class="opt"><input type="radio" name="mode" value="remote" id="moderemote"> A readsb already running somewhere</label>
-  <div id="remotebox" style="display:none; margin-left:1.55rem">
-    <input type="text" id="beast" placeholder="host:port of its Beast output, like 192.168.1.10:30005">
+  <p id="alttotal"></p>
+  <div class="actions">
+    <button class="cta" data-next>CONTINUE</button>
+    <span class="enter">press Enter ↵</span>
+    <button class="back" data-back>Back</button>
   </div>
 </section>
 
-<section>
-  <h2>5 · Who to feed</h2>
-  <p class="hint">Non-exclusive — feeding one costs the others nothing.</p>
+<section class="step" data-step="4" hidden>
+  <p class="kicker caps">4 · Signal</p>
+  <h1>Where do Mode S frames come from?</h1>
+  <p class="sub">The station needs one source of raw receiver frames.</p>
+  <label class="opt" id="optsdr"><input type="radio" name="mode" value="sdr">
+    <span class="t"><span class="mark">✓</span><span id="sdrlabel">This machine's SDR dongle</span></span>
+    <span class="gives" id="sdrgives">stationd runs readsb for it</span>
+  </label>
+  <label class="opt" id="optremote"><input type="radio" name="mode" value="remote">
+    <span class="t"><span class="mark">✓</span><span>A readsb already running somewhere</span></span>
+    <span class="gives">the host and port of its Beast output</span>
+    <div id="remotebox"><input type="text" id="beast"
+      placeholder="192.168.1.10:30005" autocomplete="off"></div>
+  </label>
+  <div class="actions">
+    <button class="cta" data-next>CONTINUE</button>
+    <span class="enter">press Enter ↵</span>
+    <button class="back" data-back>Back</button>
+  </div>
+</section>
+
+<section class="step" data-step="5" hidden>
+  <p class="kicker caps">5 · Feeding</p>
+  <h1>Who should hear about your sky?</h1>
+  <p class="sub">Non-exclusive — feeding one costs the others nothing.</p>
   <div id="feeds"></div>
-  <label class="opt"><input type="checkbox" id="havekeys"> I have station keys from an aggregator</label>
+  <label class="small"><input type="checkbox" id="havekeys">
+    I have station keys from an aggregator</label>
+  <div class="actions">
+    <button class="cta" data-next>CONTINUE</button>
+    <span class="enter">press Enter ↵</span>
+    <button class="back" data-back>Back</button>
+  </div>
 </section>
 
-<div id="notes"></div>
-<div id="problems"></div>
-<button class="primary" id="go">Set up the station</button>
-<div id="done" hidden></div>
+<section class="step" data-step="6" hidden>
+  <p class="kicker caps">6 · Review</p>
+  <h1>The station, in short.</h1>
+  <div id="summary"></div>
+  <div id="notes"></div>
+  <div id="problems"></div>
+  <div class="actions">
+    <button class="cta" id="go">SET UP THE STATION</button>
+    <button class="back" data-back>Back</button>
+  </div>
+</section>
 
-<script src="/vendor/leaflet.js"></script>
+<section class="step center" data-step="7" hidden>
+  <svg class="bigmark" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#221f1a"/><path d="M10.5 36Q9 35 10.74 34.54L27.13 30.23Q28 30 28.42 29.21L35.58 15.79Q36 15 36.88 15.18L40.12 15.82Q41 16 40.75 16.87L37.25 29.13Q37 30 37.87 30.25L51 34C54 35 55 37 54.3 38.4Q54 39 53 38.94L36.9 38.05Q36 38 35.46 38.72L27.54 49.28Q27 50 26.13 49.78L23.87 49.22Q23 49 23.35 48.17L27.65 37.83Q28 37 27.11 37.14L15.89 38.86Q15 39 14.25 38.5Z" fill="#f5f1e6" transform="rotate(29 32 32)"/></svg>
+  <h1>The station is starting.</h1>
+  <div id="notes7"></div>
+  <p class="sub" id="done">Writing the configuration and raising the stack…</p>
+</section>
+
+</div></main>
+
+<script src="/vendor/maplibre-gl.js"></script>
 <script>
-let map, pin, catalog = [];
+let map, pin, catalog = [], active = 0;
+const steps = [...document.querySelectorAll('.step')];
+const LAST_Q = 6;
+
+function show(n, backwards) {
+  const a = steps[active], b = steps[n];
+  if (a === b) return;
+  active = n;
+  a.classList.add(backwards ? 'pre' : 'out');
+  setTimeout(() => {
+    a.hidden = true; a.classList.remove('out', 'pre');
+    b.hidden = false; b.classList.add(backwards ? 'out' : 'pre');
+    void b.offsetWidth; // style flush, so removing the class transitions
+    b.classList.remove('out', 'pre');
+    if (n === 2) initMap();
+    if (n === 6) buildSummary();
+    const first = b.querySelector('input[type=text],input[type=number]');
+    if (first && n !== 2) first.focus();
+  }, 300);
+  document.getElementById('bar').style.width =
+    (n === 0 ? 0 : Math.min(n, LAST_Q) / LAST_Q * 100) + '%';
+  document.getElementById('count').textContent =
+    (n >= 1 && n <= LAST_Q) ? n + ' / ' + LAST_Q : '';
+}
+
+function complain(msg) {
+  // A gentle shake-free nudge: the sub line of the active step turns red briefly.
+  const sub = steps[active].querySelector('.sub');
+  if (!sub) return alert(msg);
+  const old = sub.textContent;
+  sub.style.color = 'var(--red)'; sub.textContent = msg;
+  setTimeout(() => { sub.style.color = ''; sub.textContent = old; }, 2600);
+}
+
+function validate(n) {
+  if (n === 1 && !document.getElementById('name').value.trim())
+    return 'The station needs a name — anything you like.';
+  if (n === 2) {
+    const la = parseFloat(document.getElementById('lat').value);
+    const lo = parseFloat(document.getElementById('lon').value);
+    if (isNaN(la) || isNaN(lo)) return 'Click the antenna\'s spot on the map first.';
+  }
+  if (n === 3 && isNaN(parseFloat(document.getElementById('ground').value)))
+    return 'Ground elevation is empty — go back to set the position, or type it.';
+  if (n === 4) {
+    if (!document.querySelector('input[name=mode]:checked'))
+      return 'Pick one of the two sources.';
+    if (modeVal() === 'remote' && !document.getElementById('beast').value.includes(':'))
+      return 'The Beast source needs host:port, like 192.168.1.10:30005.';
+  }
+  if (n === 5 && !pickedFeeds().length)
+    return 'Pick at least one — or the station tells no one.';
+  return null;
+}
+
+function next() {
+  const bad = validate(active);
+  if (bad) return complain(bad);
+  show(active + 1, false);
+}
+document.querySelectorAll('[data-next]').forEach(b => b.onclick = next);
+document.querySelectorAll('[data-back]').forEach(b =>
+  b.onclick = () => show(active - 1, true));
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || active >= LAST_Q) return;
+  if (e.target.closest && e.target.closest('#map')) return;
+  e.preventDefault(); next();
+});
+
+function modeVal() {
+  const c = document.querySelector('input[name=mode]:checked');
+  return c ? c.value : '';
+}
+function markOpts() {
+  document.getElementById('optsdr').classList.toggle('on', modeVal() === 'sdr');
+  document.getElementById('optremote').classList.toggle('on', modeVal() === 'remote');
+  document.getElementById('remotebox').style.display =
+    modeVal() === 'remote' ? 'block' : 'none';
+  if (modeVal() === 'remote') document.getElementById('beast').focus();
+}
+document.querySelectorAll('input[name=mode]').forEach(r =>
+  r.addEventListener('change', markOpts));
 
 function setPos(lat, lon, zoomTo) {
   lat = +lat.toFixed(6); lon = +lon.toFixed(6);
   document.getElementById('lat').value = lat;
   document.getElementById('lon').value = lon;
   if (map) {
-    if (!pin) pin = L.marker([lat, lon], {icon: L.divIcon({className:'', html:'<div class="pin"></div>', iconSize:[14,14], iconAnchor:[7,7]}), draggable: true})
-      .addTo(map).on('dragend', () => { const p = pin.getLatLng(); setPos(p.lat, p.lng, false); });
-    pin.setLatLng([lat, lon]);
-    if (zoomTo) map.setView([lat, lon], Math.max(map.getZoom(), 17));
+    if (!pin) {
+      const el = document.createElement('div'); el.className = 'pin';
+      pin = new maplibregl.Marker({ element: el, draggable: true })
+        .setLngLat([lon, lat]).addTo(map);
+      pin.on('dragend', () => { const p = pin.getLngLat(); setPos(p.lat, p.lng, false); });
+    } else pin.setLngLat([lon, lat]);
+    if (zoomTo) map.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 15) });
   }
   fetch('https://api.open-meteo.com/v1/elevation?latitude='+lat+'&longitude='+lon)
     .then(r => r.json()).then(d => {
@@ -398,67 +621,175 @@ function setPos(lat, lon, zoomTo) {
     }).catch(() => {});
 }
 
+// ---- paper skin -------------------------------------------------------
+// Mirrors paperify() on the network map (site/network/index.html): the
+// brand's basemap reskin — paper ground, warm sea, quiet ink line-work.
+// When it changes there, change it here in the same commit.
+const BASEMAP = 'https://tiles.openfreemap.org/styles/liberty';
+const INKRGB = [34, 31, 26];
+const colorCtx = document.createElement('canvas').getContext('2d');
+function parseColor(value) {
+  if (typeof value !== 'string' || value.indexOf('{') !== -1) return null;
+  colorCtx.fillStyle = '#010203';
+  colorCtx.fillStyle = value;
+  if (colorCtx.fillStyle === '#010203' && value !== '#010203') return null;
+  colorCtx.clearRect(0, 0, 1, 1);
+  colorCtx.fillRect(0, 0, 1, 1);
+  const d = colorCtx.getImageData(0, 0, 1, 1).data;
+  return [d[0], d[1], d[2], d[3] / 255];
+}
+function inkAt(alpha) {
+  return 'rgba(' + INKRGB[0] + ',' + INKRGB[1] + ',' + INKRGB[2] + ',' + alpha + ')';
+}
+function towardInk(rgba, maxInk) {
+  const L = (0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2]) / 255;
+  return inkAt(+(((1 - L) * maxInk * rgba[3])).toFixed(3));
+}
+function mapColors(value, fn) {
+  const rgba = parseColor(value);
+  if (rgba) return fn(rgba);
+  if (Array.isArray(value)) return value.map(v => mapColors(v, fn));
+  if (value && typeof value === 'object' && value.stops) {
+    const copy = JSON.parse(JSON.stringify(value));
+    copy.stops = copy.stops.map(s => [s[0], mapColors(s[1], fn)]);
+    return copy;
+  }
+  return value;
+}
+function paint(layer, key, value) {
+  layer.paint = layer.paint || {};
+  layer.paint[key] = value;
+}
+function paperify(style) {
+  style.layers = style.layers.filter(l =>
+    !/^(poi|housenumber|road_shield|highway-shield|road_one_way|natural_earth)/.test(l.id));
+  style.layers.forEach(l => {
+    const id = l.id;
+    if (l.type === 'background') {
+      paint(l, 'background-color', '#F5F1E6');
+    } else if (l.type === 'fill') {
+      if (id === 'water') paint(l, 'fill-color', '#E9E2D0');
+      else if (id === 'building') paint(l, 'fill-color', inkAt(0.07));
+      else if (/^aeroway/.test(id)) paint(l, 'fill-color', inkAt(0.10));
+      else {
+        Object.keys(l.paint || {}).forEach(k => {
+          if (/color/.test(k))
+            l.paint[k] = mapColors(l.paint[k], rgba => towardInk(rgba, 0.10));
+        });
+      }
+    } else if (l.type === 'line') {
+      if (/casing/.test(id)) paint(l, 'line-color', '#F5F1E6');
+      else if (/^waterway/.test(id)) paint(l, 'line-color', '#DCD3BC');
+      else if (/^boundary/.test(id)) paint(l, 'line-color', inkAt(0.34));
+      else if (/motorway|trunk_primary/.test(id)) paint(l, 'line-color', inkAt(0.38));
+      else if (/rail/.test(id)) paint(l, 'line-color', inkAt(0.16));
+      else if (/^aeroway/.test(id)) paint(l, 'line-color', inkAt(0.35));
+      else paint(l, 'line-color', inkAt(0.20));
+    } else if (l.type === 'symbol') {
+      paint(l, 'text-color', inkAt(0.68));
+      paint(l, 'text-halo-color', 'rgba(245,241,230,.85)');
+      if (l.paint && l.paint['icon-color']) paint(l, 'icon-color', inkAt(0.5));
+    }
+  });
+  return style;
+}
+
+function initMap() {
+  if (map) { map.resize(); return; }
+  if (initMap.started) return;
+  initMap.started = true;
+  fetch(BASEMAP).then(r => r.json()).then(style => {
+    map = new maplibregl.Map({
+      container: 'map',
+      style: paperify(style),
+      center: [0, 30],
+      zoom: 1.2,
+      attributionControl: { compact: true },
+    });
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+    map.on('click', e => setPos(e.lngLat.lat, e.lngLat.lng, false));
+    const la = parseFloat(document.getElementById('lat').value);
+    const lo = parseFloat(document.getElementById('lon').value);
+    if (!isNaN(la) && !isNaN(lo)) setPos(la, lo, true);
+  }).catch(() => {
+    document.getElementById('map').textContent =
+      'No map here (offline?) — type coordinates below.';
+  });
+}
+
 function altTotal() {
   const g = parseFloat(document.getElementById('ground').value);
   const m = parseFloat(document.getElementById('mast').value);
   document.getElementById('alttotal').textContent =
-    (isNaN(g) || isNaN(m)) ? '' : 'Antenna altitude: ' + (g + m).toFixed(0) + ' m above sea level';
+    (isNaN(g) || isNaN(m)) ? '' : 'Antenna altitude: ' + (g + m).toFixed(0) + ' m above sea level.';
 }
 document.getElementById('ground').addEventListener('input', altTotal);
 document.getElementById('mast').addEventListener('input', altTotal);
 for (const id of ['lat','lon']) document.getElementById(id).addEventListener('change', () => {
-  const la = parseFloat(document.getElementById('lat').value), lo = parseFloat(document.getElementById('lon').value);
+  const la = parseFloat(document.getElementById('lat').value);
+  const lo = parseFloat(document.getElementById('lon').value);
   if (!isNaN(la) && !isNaN(lo)) setPos(la, lo, true);
 });
-
-try {
-  map = L.map('map').setView([30, 0], 2);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
-  map.on('click', e => setPos(e.latlng.lat, e.latlng.lng, false));
-} catch (e) { document.getElementById('map').textContent = 'No map here (offline?) — type coordinates below.'; }
 
 if (window.isSecureContext && navigator.geolocation) {
   const b = document.getElementById('locate');
   b.hidden = false;
   b.onclick = () => navigator.geolocation.getCurrentPosition(
     p => setPos(p.coords.latitude, p.coords.longitude, true),
-    () => { b.textContent = 'Location unavailable — click the map instead'; });
+    () => { b.textContent = 'Location unavailable — click the map'; });
 }
 
-document.getElementById('modesdr').addEventListener('change', modeBox);
-document.getElementById('moderemote').addEventListener('change', modeBox);
-function modeBox() {
-  document.getElementById('remotebox').style.display =
-    document.getElementById('moderemote').checked ? '' : 'none';
-}
 document.getElementById('havekeys').addEventListener('change', e =>
   document.getElementById('feeds').classList.toggle('showkeys', e.target.checked));
+
+function pickedFeeds() {
+  const out = [];
+  document.querySelectorAll('#feeds input[type=checkbox]').forEach(c => {
+    if (!c.checked) return;
+    const a = catalog[+c.dataset.i];
+    out.push({ name: a.name, adsb: a.adsb, mlat: a.mlat,
+      uuid: (document.getElementById('key' + c.dataset.i) || {value:''}).value.trim() });
+  });
+  return out;
+}
 
 fetch('/setup/info').then(r => r.json()).then(d => {
   catalog = d.catalog;
   if (d.hostname && !document.getElementById('name').value)
     document.getElementById('name').value = d.hostname;
-  if (d.sdr) document.getElementById('sdrlabel').textContent =
-    "This machine's SDR dongle — one is plugged in right now";
-  (d.sdr ? document.getElementById('modesdr') : document.getElementById('moderemote')).checked = true;
-  modeBox();
+  if (d.sdr) document.getElementById('sdrgives').textContent =
+    'one is plugged in right now — stationd runs readsb for it';
+  document.querySelector('input[name=mode][value=' + (d.sdr ? 'sdr' : 'remote') + ']').checked = true;
+  markOpts();
   document.getElementById('feeds').innerHTML = d.catalog.map((a, i) => {
     const what = a.adsb && a.mlat ? 'ADS-B + MLAT' : (a.adsb ? 'ADS-B' : 'MLAT');
-    return '<label class="feed"><input type="checkbox" data-i="'+i+'" checked> <b>'+a.name+'</b>'
-      + ' <span class="gives">'+what+' — '+a.gives+'</span>'
-      + '<div class="keyfield"><input type="text" id="key'+i+'" placeholder="station key for '+a.name+' (leave empty if none)"></div></label>';
+    return '<label class="opt on"><input type="checkbox" data-i="'+i+'" checked>'
+      + '<span class="t"><span class="mark">✓</span><b>'+a.name+'</b></span>'
+      + '<span class="gives">'+what+' — '+a.gives+'</span>'
+      + '<div class="keyfield"><input type="text" id="key'+i+'" placeholder="station key for '+a.name+'" autocomplete="off"></div></label>';
   }).join('');
+  document.querySelectorAll('#feeds input[type=checkbox]').forEach(c =>
+    c.addEventListener('change', () =>
+      c.closest('.opt').classList.toggle('on', c.checked)));
 });
 
+function buildSummary() {
+  const g = parseFloat(document.getElementById('ground').value);
+  const m = parseFloat(document.getElementById('mast').value);
+  const feeds = pickedFeeds();
+  const src = modeVal() === 'sdr' ? "this machine's SDR"
+    : document.getElementById('beast').value.trim();
+  document.getElementById('summary').innerHTML = '';
+  const p = (t) => { const e = document.createElement('p');
+    e.textContent = t; document.getElementById('summary').append(e); };
+  p(document.getElementById('name').value.trim() + ' at '
+    + document.getElementById('lat').value + ', ' + document.getElementById('lon').value
+    + ', antenna at ' + ((isNaN(g)?0:g)+(isNaN(m)?0:m)).toFixed(0) + ' m.');
+  p('Frames from ' + src + '.');
+  p('Feeding ' + feeds.map(f => f.name).join(', ') + '.');
+}
+
 document.getElementById('go').onclick = async () => {
-  const feeds = [];
-  document.querySelectorAll('#feeds input[type=checkbox]').forEach(c => {
-    if (!c.checked) return;
-    const a = catalog[+c.dataset.i];
-    feeds.push({ name: a.name, adsb: a.adsb, mlat: a.mlat,
-      uuid: (document.getElementById('key' + c.dataset.i) || {value:''}).value.trim() });
-  });
   const g = parseFloat(document.getElementById('ground').value);
   const m = parseFloat(document.getElementById('mast').value);
   const body = {
@@ -466,32 +797,18 @@ document.getElementById('go').onclick = async () => {
     lat: parseFloat(document.getElementById('lat').value),
     lon: parseFloat(document.getElementById('lon').value),
     alt_m: (isNaN(g) ? 0 : g) + (isNaN(m) ? 0 : m),
-    input: { mode: document.getElementById('modesdr').checked ? 'sdr' : 'remote',
-             beast: document.getElementById('beast').value.trim() },
-    feeds,
+    input: { mode: modeVal(), beast: document.getElementById('beast').value.trim() },
+    feeds: pickedFeeds(),
   };
-  const local = [];
-  if (!body.name) local.push('The station needs a name.');
-  if (isNaN(body.lat) || isNaN(body.lon)) local.push('Click the antenna\'s position on the map (or type coordinates).');
-  if (isNaN(g)) local.push('Ground elevation is empty — set the position, or type it.');
-  if (!feeds.length) local.push('Pick at least one aggregator to feed.');
-  if (body.input.mode === 'remote' && !body.input.beast.includes(':'))
-    local.push('The Beast source needs host:port, like 192.168.1.10:30005.');
-  if (local.length) return showProblems(local, []);
-
   let d;
   try {
     d = await (await fetch('/setup', { method: 'POST', body: JSON.stringify(body) })).json();
   } catch (e) { return showProblems(['The station did not answer — is it still running?'], []); }
   if (!d.ok) return showProblems(d.problems || [], d.notes || []);
+  fill('notes7', d.notes || []);
+  show(7, false);
   const notes = d.notes || [];
-  showProblems([], notes);
   const done = document.getElementById('done');
-  done.hidden = false;
-  done.textContent = 'Configuration written — the station is starting…';
-  document.getElementById('go').disabled = true;
-  // With notes worth reading, wait for a click instead of yanking the
-  // page away; otherwise go to the station page as soon as it answers.
   const poll = setInterval(async () => {
     try {
       const s = await (await fetch('/status.json')).json();
@@ -499,10 +816,10 @@ document.getElementById('go').onclick = async () => {
       clearInterval(poll);
       if (notes.length) {
         done.innerHTML = '';
-        done.append('The station is up. Read the notes above, then: ');
+        done.append('It is up. Read the notes above, then ');
         const a = document.createElement('a');
         a.href = '/'; a.textContent = 'open its page';
-        done.append(a);
+        done.append(a); done.append('.');
       } else {
         location.href = '/';
       }
@@ -510,11 +827,10 @@ document.getElementById('go').onclick = async () => {
   }, 2000);
 };
 
-function showProblems(problems, notes) {
-  document.getElementById('problems').innerHTML = problems.map(p => '<div></div>').join('');
-  document.querySelectorAll('#problems div').forEach((el, i) => el.textContent = problems[i]);
-  document.getElementById('notes').innerHTML = notes.map(p => '<div></div>').join('');
-  document.querySelectorAll('#notes div').forEach((el, i) => el.textContent = notes[i]);
+function fill(id, items) {
+  document.getElementById(id).innerHTML = items.map(() => '<div></div>').join('');
+  document.querySelectorAll('#' + id + ' div').forEach((el, i) => el.textContent = items[i]);
 }
+function showProblems(problems, notes) { fill('problems', problems); fill('notes', notes); }
 </script>
 "##;
