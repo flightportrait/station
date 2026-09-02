@@ -17,6 +17,8 @@ pub struct Aggregator {
     pub gives: &'static str,
     /// The aggregator's own site, for the setup page's card link.
     pub url: &'static str,
+    /// How a station key works for this network, in one plain clause.
+    pub key_hint: &'static str,
 }
 
 /// Aggregators on offer. Feeding is non-exclusive; pick any.
@@ -28,6 +30,7 @@ pub const CATALOG: &[Aggregator] = &[
         note: "ours — powers the art frames; MLAT when our solver goes public",
         gives: "your sky becomes daily posters on FlightPortrait frames",
         url: "https://flightportrait.com",
+        key_hint: "arrives with a FlightPortrait frame; empty is fine without one",
     },
     Aggregator {
         name: "adsb.lol",
@@ -36,6 +39,8 @@ pub const CATALOG: &[Aggregator] = &[
         note: "open data, no account needed",
         gives: "a public map and a free API of what you feed",
         url: "https://adsb.lol",
+        key_hint:
+            "optional — no account exists; generate one and keep it, their site treats it as yours",
     },
     Aggregator {
         name: "adsb.fi",
@@ -44,6 +49,8 @@ pub const CATALOG: &[Aggregator] = &[
         note: "open data, no account needed",
         gives: "a public map and a free API of what you feed",
         url: "https://adsb.fi",
+        key_hint:
+            "optional — no account exists; generate one and keep it to mark the station as yours",
     },
     Aggregator {
         name: "adsb.win",
@@ -52,6 +59,7 @@ pub const CATALOG: &[Aggregator] = &[
         note: "open data, no account needed",
         gives: "a public map; UK-centred community",
         url: "https://adsb.win",
+        key_hint: "only if the operator gave you one",
     },
 ];
 
@@ -209,9 +217,9 @@ fn gather_fancy() -> anyhow::Result<Option<Answers>> {
         "This machine's SDR dongle (stationd will run readsb)"
     };
     let input_choice = Select::with_theme(&th)
-        .with_prompt("Where do Mode S frames come from?")
+        .with_prompt("Where do the radio signals come from?")
         .items(&[
-            "A readsb already running somewhere (host:port of its Beast output)",
+            "A readsb already running on another machine (host:port of its data stream)",
             sdr_label,
         ])
         .default(if sdr { 1 } else { 0 })
@@ -414,8 +422,8 @@ fn gather_plain() -> anyhow::Result<Option<Answers>> {
     };
 
     let sdr = detect_rtlsdr();
-    println!("\nWhere do Mode S frames come from?");
-    println!("  1. A readsb already running somewhere (host:port of its Beast output)");
+    println!("\nWhere do the radio signals come from?");
+    println!("  1. A readsb already running on another machine (host:port of its data stream)");
     if sdr {
         println!("  2. This machine's SDR dongle — one is plugged in right now");
     } else {

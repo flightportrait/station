@@ -129,6 +129,7 @@ fn info_json() -> String {
         "catalog": init::CATALOG.iter().map(|a| serde_json::json!({
             "name": a.name, "adsb": a.adsb, "mlat": a.mlat,
             "note": a.note, "gives": a.gives, "url": a.url,
+            "key_hint": a.key_hint,
         })).collect::<Vec<_>>(),
     })
     .to_string()
@@ -378,8 +379,9 @@ const SETUP_PAGE: &str = r##"<!doctype html>
   .tile svg{width:28px;height:28px;display:block}
   .ext{margin-left:auto;color:var(--red);font-size:14px;text-decoration:none;flex:none}
   .ext:hover{text-decoration:underline}
-  .keyfield{margin-top:10px;display:none}
-  .showkeys .opt.on .keyfield{display:block}
+  .keylink{font-size:14px;margin-top:6px;display:inline-block}
+  .keyfield{margin-top:8px;display:none}
+  .keyfield.open{display:block}
   #customfields{margin-top:10px;display:grid;gap:8px}
   #customfields[hidden]{display:none}
   label.small{display:flex;gap:8px;align-items:center;color:var(--quiet);
@@ -477,17 +479,20 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 <section class="step" data-step="4" hidden>
   <p class="kicker caps">4 · Receiver</p>
   <h1>Your receiver.</h1>
-  <p class="sub">A station listens to aircraft with a small USB radio —
-  an RTL-SDR dongle — plugged into this machine and wired to an antenna.</p>
+  <p class="sub">Aircraft announce who and where they are by radio all day
+  (the broadcasts are called ADS-B). A station hears them with a small USB
+  radio — an RTL-SDR dongle — plugged into this machine, wired to an antenna.</p>
   <div class="opt" id="optsdr">
     <span class="t"><span class="mark">✓</span><b id="sdrtitle">Looking for an RTL-SDR dongle…</b></span>
     <span class="gives" id="sdrgives">none found yet — plug one in; this page notices by itself</span>
   </div>
   <div class="opt" id="optremote">
     <span class="t"><span class="mark">✓</span><b>My receiver runs on another machine</b></span>
-    <span class="gives">unusual — a readsb already runs elsewhere; enter its Beast output</span>
-    <div id="remotebox" style="display:none;margin-top:10px"><input type="text" id="beast"
-      placeholder="192.168.1.10:30005" autocomplete="off"></div>
+    <span class="gives">unusual — the radio software (readsb) already runs
+    on another machine; enter its address</span>
+    <div id="remotebox" style="display:none;margin-top:10px">
+      <span class="fieldlbl">its address (host:port — the data stream, usually port 30005)</span>
+      <input type="text" id="beast" placeholder="192.168.1.10:30005" autocomplete="off"></div>
   </div>
   <div class="actions">
     <button class="cta" data-next>CONTINUE</button>
@@ -505,7 +510,7 @@ const SETUP_PAGE: &str = r##"<!doctype html>
   <div id="feeds"></div>
   <div class="opt" id="customcard">
     <span class="t"><span class="tile" style="background:var(--line);color:var(--ink)">+</span><b>Somewhere else</b></span>
-    <span class="gives">any other network that takes Beast or mlat-client connections</span>
+    <span class="gives">any other network — an MLAT server, a raw-data destination, or both</span>
     <div id="customfields" hidden>
       <input type="text" id="cname" placeholder="name" autocomplete="off">
       <input type="text" id="cmlat" placeholder="MLAT server host:port (optional)" autocomplete="off">
@@ -513,11 +518,9 @@ const SETUP_PAGE: &str = r##"<!doctype html>
       <input type="text" id="ckey" placeholder="station key (optional)" autocomplete="off">
     </div>
   </div>
-  <label class="small"><input type="checkbox" id="havekeys">
-    I have a station key from one of these</label>
-  <p class="finehint">Some networks tie a station to an account with a key
-  (a UUID from their site — see each card's link). Without one you feed
-  anonymously, which works fine.</p>
+  <p class="finehint">A station key is a UUID that marks a feed as yours.
+  Each card explains its own — and empty always works: you simply feed
+  anonymously.</p>
   <div class="actions">
     <button class="cta" data-next>CONTINUE</button>
     <span class="enter">press Enter ↵</span>
@@ -603,7 +606,7 @@ function validate(n) {
   if (n === 4) {
     if (mode() === 'remote') {
       if (!document.getElementById('beast').value.includes(':'))
-        return 'The Beast source needs host:port, like 192.168.1.10:30005.';
+        return 'That address needs host:port, like 192.168.1.10:30005.';
     } else if (!sdrFound) {
       return 'No dongle found yet — plug it in, or pick the second card.';
     }
@@ -821,9 +824,6 @@ if (window.isSecureContext && navigator.geolocation) {
 }
 
 // ---- feeds ------------------------------------------------------------
-document.getElementById('havekeys').addEventListener('change', e =>
-  document.getElementById('feeds').classList.toggle('showkeys', e.target.checked));
-
 const FPMARK = '<svg viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#221f1a"/><path d="M10.5 36Q9 35 10.74 34.54L27.13 30.23Q28 30 28.42 29.21L35.58 15.79Q36 15 36.88 15.18L40.12 15.82Q41 16 40.75 16.87L37.25 29.13Q37 30 37.87 30.25L51 34C54 35 55 37 54.3 38.4Q54 39 53 38.94L36.9 38.05Q36 38 35.46 38.72L27.54 49.28Q27 50 26.13 49.78L23.87 49.22Q23 49 23.35 48.17L27.65 37.83Q28 37 27.11 37.14L15.89 38.86Q15 39 14.25 38.5Z" fill="#f5f1e6" transform="rotate(29 32 32)"/></svg>';
 const TILECOLORS = ['var(--blue)', 'var(--green)', 'var(--yellow)', 'var(--red)'];
 function tileFor(a, i) {
@@ -871,11 +871,26 @@ fetch('/setup/info').then(r => r.json()).then(d => {
       + '<span class="t">' + tileFor(a, i) + '<b>'+a.name+'</b>'
       + '<a class="ext" href="'+a.url+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">site ↗</a></span>'
       + '<span class="gives">'+what+' — '+a.gives+'</span>'
-      + '<div class="keyfield"><input type="text" id="key'+i+'" placeholder="station key for '+a.name+'" autocomplete="off"></div></label>';
+      + '<button type="button" class="linky keylink" data-i="'+i+'">add a station key</button>'
+      + '<div class="keyfield" id="kf'+i+'">'
+      + '<input type="text" id="key'+i+'" placeholder="station key (a UUID)" autocomplete="off">'
+      + '<p class="finehint">'+a.key_hint+' · <button type="button" class="linky genkey" data-i="'+i+'">generate one</button></p>'
+      + '</div></label>';
   }).join('');
   document.querySelectorAll('#feeds input[type=checkbox]').forEach(c =>
     c.addEventListener('change', () =>
       c.closest('.opt').classList.toggle('on', c.checked)));
+  document.querySelectorAll('.keylink').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation(); e.preventDefault();
+    const f = document.getElementById('kf' + b.dataset.i);
+    f.classList.toggle('open');
+    if (f.classList.contains('open')) document.getElementById('key' + b.dataset.i).focus();
+  }));
+  document.querySelectorAll('.genkey').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation(); e.preventDefault();
+    const inp = document.getElementById('key' + b.dataset.i);
+    inp.value = (crypto.randomUUID && crypto.randomUUID()) || '';
+  }));
 });
 
 // ---- review + submit --------------------------------------------------
