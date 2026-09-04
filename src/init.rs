@@ -77,18 +77,24 @@ pub struct Answers {
     pub alt: String,
     pub input_beast: String,
     pub readsb_json: Option<String>,
+    /// readsb command line: the radio when `radio_prog` is None, else the fallback.
     pub readsb_prog: Option<String>,
+    /// The Station radio (rx) command line, when rx is installed.
+    pub radio_prog: Option<String>,
+    /// The station key every feed carries.
+    pub station_uuid: String,
     pub feeds: Vec<FeedChoice>,
     /// Status listen address to write; None keeps the config default.
     pub listen: Option<String>,
 }
 
-pub fn run(config_path: &std::path::Path) -> anyhow::Result<()> {
+pub fn run(config_path: &std::path::Path, radio: Option<&std::path::Path>) -> anyhow::Result<()> {
     let fancy = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let rx = find_rx(radio);
     let answers = if fancy {
-        gather_fancy()?
+        gather_fancy(rx.as_deref())?
     } else {
-        gather_plain()?
+        gather_plain(rx.as_deref())?
     };
     let Some(a) = answers else {
         println!("Nothing written.");
@@ -117,12 +123,49 @@ fn default_station_name() -> String {
         .unwrap_or_default()
 }
 
+/// The radio command line for a local dongle. readsb and rx take the same
+/// flags, so one shape serves both; port 30004 takes MLAT results back in.
 pub fn readsb_program(readsb_path: &str, json_dir: &str, lat: f64, lon: f64) -> String {
     format!(
         "{readsb_path} --device-type rtlsdr --gain auto --quiet \
-         --net --net-bo-port 30005 --write-json {json_dir} \
+         --net --net-bo-port 30005 --net-bi-port 30004 --write-json {json_dir} \
          --write-json-every 1 --lat {lat} --lon {lon}"
     )
+}
+
+/// Where MLAT results go: the local radio's Beast input.
+pub const RESULTS_LOCAL: &str = "127.0.0.1:30004";
+
+/// The Station radio, if installed: the path given, else `~/station/rx`,
+/// else `rx` beside this stationd binary. Only an executable file counts.
+pub fn find_rx(explicit: Option<&std::path::Path>) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(p) = explicit {
+        candidates.push(p.to_path_buf());
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(std::path::Path::new(&home).join("station").join("rx"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("rx"));
+        }
+    }
+    candidates.into_iter().find_map(|p| {
+        let m = std::fs::metadata(&p).ok()?;
+        (m.is_file() && m.permissions().mode() & 0o111 != 0).then(|| p.display().to_string())
+    })
+}
+
+/// The station key: one UUID for every feed, so each network sees one
+/// station. From the kernel's generator, else our own.
+pub fn station_uuid() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/random/uuid")
+        .map(|s| s.trim().to_string())
+        .ok()
+        .filter(|s| s.len() == 36)
+        .unwrap_or_else(pseudo_uuid)
 }
 
 /// Uniform per-feed post-processing: drop ADS-B destinations the station
@@ -131,8 +174,16 @@ pub fn readsb_program(readsb_path: &str, json_dir: &str, lat: f64, lon: f64) -> 
 pub fn resolve_feeds(
     mut feeds: Vec<FeedChoice>,
     local_readsb: bool,
+    station_uuid: &str,
 ) -> (Vec<FeedChoice>, Vec<String>) {
     let mut notes = Vec::new();
+    // One station, one key: every feed without a key of its own gets the
+    // station's, so each network can tell this station is one station.
+    for f in &mut feeds {
+        if f.uuid.trim().is_empty() {
+            f.uuid = station_uuid.to_string();
+        }
+    }
     if !local_readsb {
         for f in &mut feeds {
             if let Some(dest) = f.adsb.take() {
@@ -170,9 +221,10 @@ pub fn resolve_feeds(
 
 // --- terminal flow ------------------------------------------------------
 
-fn gather_fancy() -> anyhow::Result<Option<Answers>> {
+fn gather_fancy(rx: Option<&str>) -> anyhow::Result<Option<Answers>> {
     use dialoguer::{theme::ColorfulTheme, Confirm, Input, MultiSelect, Select};
     let th = ColorfulTheme::default();
+    let station_uuid = station_uuid();
 
     println!("Station setup — a few questions, then a working station.\n");
 
@@ -224,16 +276,29 @@ fn gather_fancy() -> anyhow::Result<Option<Answers>> {
         ])
         .default(if sdr { 1 } else { 0 })
         .interact()?;
-    let (input_beast, readsb_json, readsb_prog) = if input_choice == 1 {
-        let readsb: String = Input::with_theme(&th)
-            .with_prompt("Path to the readsb binary")
-            .default("/usr/local/bin/readsb".into())
-            .interact_text()?;
+    let (input_beast, readsb_json, readsb_prog, radio_prog) = if input_choice == 1 {
         let json_dir = "state/readsb".to_string();
+        let radio_prog = rx.map(|p| readsb_program(p, &json_dir, lat, lon));
+        if let Some(p) = rx {
+            println!("  The Station radio is installed at {p}; readsb stays as its fallback.");
+        }
+        let readsb: String = Input::with_theme(&th)
+            .with_prompt(if rx.is_some() {
+                "Path to the readsb binary (Enter = none, no fallback)"
+            } else {
+                "Path to the readsb binary"
+            })
+            .default(if rx.is_some() { String::new() } else { "/usr/local/bin/readsb".into() })
+            .allow_empty(rx.is_some())
+            .interact_text()?;
+        let readsb_prog = Some(readsb.trim())
+            .filter(|s| !s.is_empty())
+            .map(|p| readsb_program(p, &json_dir, lat, lon));
         (
             "127.0.0.1:30005".to_string(),
             Some(json_dir.clone()),
-            Some(readsb_program(&readsb, &json_dir, lat, lon)),
+            readsb_prog,
+            radio_prog,
         )
     } else {
         let src: String = Input::with_theme(&th)
@@ -247,7 +312,7 @@ fn gather_fancy() -> anyhow::Result<Option<Answers>> {
                 }
             })
             .interact_text()?;
-        (src, None, None)
+        (src, None, None, None)
     };
 
     println!();
@@ -302,7 +367,11 @@ fn gather_fancy() -> anyhow::Result<Option<Answers>> {
         }
     }
 
-    let (feeds, notes) = resolve_feeds(feeds, readsb_prog.is_some());
+    let (feeds, notes) = resolve_feeds(
+        feeds,
+        readsb_prog.is_some() || radio_prog.is_some(),
+        &station_uuid,
+    );
     for n in &notes {
         println!("  note: {n}");
     }
@@ -319,6 +388,8 @@ fn gather_fancy() -> anyhow::Result<Option<Answers>> {
         input_beast,
         readsb_json,
         readsb_prog,
+        radio_prog,
+        station_uuid,
         feeds,
         listen: None,
     };
@@ -380,7 +451,8 @@ fn ask_custom_feed(th: &dialoguer::theme::ColorfulTheme) -> anyhow::Result<Optio
 
 // --- piped flow ---------------------------------------------------------
 
-fn gather_plain() -> anyhow::Result<Option<Answers>> {
+fn gather_plain(rx: Option<&str>) -> anyhow::Result<Option<Answers>> {
+    let station_uuid = station_uuid();
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
     let mut ask = |prompt: &str, default: &str| -> String {
@@ -431,13 +503,23 @@ fn gather_plain() -> anyhow::Result<Option<Answers>> {
     }
     let default_input = if sdr { "2" } else { "1" };
     let choice = ask("Input", default_input);
-    let (input_beast, readsb_json, readsb_prog) = if choice.trim() == "2" {
-        let readsb = ask("Path to the readsb binary", "/usr/local/bin/readsb");
+    let (input_beast, readsb_json, readsb_prog, radio_prog) = if choice.trim() == "2" {
         let json_dir = "state/readsb".to_string();
+        let radio_prog = rx.map(|p| readsb_program(p, &json_dir, lat, lon));
+        let readsb = if let Some(p) = rx {
+            println!("  The Station radio is installed at {p}; readsb stays as its fallback.");
+            ask("Path to the readsb binary (Enter = none, no fallback)", "")
+        } else {
+            ask("Path to the readsb binary", "/usr/local/bin/readsb")
+        };
+        let readsb_prog = Some(readsb.trim())
+            .filter(|s| !s.is_empty())
+            .map(|p| readsb_program(p, &json_dir, lat, lon));
         (
             "127.0.0.1:30005".to_string(),
             Some(json_dir.clone()),
-            Some(readsb_program(&readsb, &json_dir, lat, lon)),
+            readsb_prog,
+            radio_prog,
         )
     } else {
         let src = loop {
@@ -447,7 +529,7 @@ fn gather_plain() -> anyhow::Result<Option<Answers>> {
             }
             println!("  host:port, like 192.168.1.10:30005.");
         };
-        (src, None, None)
+        (src, None, None, None)
     };
 
     println!("\nAggregators. Feeding is non-exclusive; add as many as you like.");
@@ -508,7 +590,11 @@ fn gather_plain() -> anyhow::Result<Option<Answers>> {
         });
     }
 
-    let (feeds, notes) = resolve_feeds(feeds, readsb_prog.is_some());
+    let (feeds, notes) = resolve_feeds(
+        feeds,
+        readsb_prog.is_some() || radio_prog.is_some(),
+        &station_uuid,
+    );
     for n in &notes {
         println!("  note: {n}");
     }
@@ -525,6 +611,8 @@ fn gather_plain() -> anyhow::Result<Option<Answers>> {
         input_beast,
         readsb_json,
         readsb_prog,
+        radio_prog,
+        station_uuid,
         feeds,
         listen: None,
     };
@@ -541,12 +629,15 @@ fn gather_plain() -> anyhow::Result<Option<Answers>> {
 fn print_summary(a: &Answers) {
     println!("\nThe station, in short:");
     println!("  {} at {}, {}, antenna at {}", a.name, a.lat, a.lon, a.alt);
-    let input_desc = if a.readsb_prog.is_some() {
-        "this machine's SDR"
+    let input_desc = if a.radio_prog.is_some() {
+        "this machine's SDR, through the Station radio"
+    } else if a.readsb_prog.is_some() {
+        "this machine's SDR, through readsb"
     } else {
         &a.input_beast
     };
     println!("  frames from {input_desc}");
+    println!("  station key {} — keep it; it marks the feeds as yours", a.station_uuid);
     for f in &a.feeds {
         let mut what = Vec::new();
         if let Some(d) = &f.adsb {
@@ -581,11 +672,21 @@ pub fn render_toml(a: &Answers) -> String {
             out.push_str(&format!("uuid = \"{}\"\n", f.uuid));
         }
     }
+    if a.radio_prog.is_some() || a.readsb_prog.is_some() {
+        // MLAT results come back into the local radio's Beast input.
+        out.push_str(&format!("\n[results]\nbeast_connect = \"{RESULTS_LOCAL}\"\n"));
+    }
     if let Some(l) = &a.listen {
         out.push_str(&format!("\n[status]\nlisten = \"{l}\"\n"));
     }
-    if let Some(r) = &a.readsb_prog {
-        out.push_str(&format!("\n[programs]\nreadsb = \"{r}\"\n"));
+    if a.radio_prog.is_some() || a.readsb_prog.is_some() {
+        out.push_str("\n[programs]\n");
+        if let Some(r) = &a.radio_prog {
+            out.push_str(&format!("radio = \"{r}\"\n"));
+        }
+        if let Some(r) = &a.readsb_prog {
+            out.push_str(&format!("readsb = \"{r}\"\n"));
+        }
     }
     out
 }
@@ -640,6 +741,78 @@ pub fn detect_rtlsdr() -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn feeds() -> Vec<FeedChoice> {
+        vec![
+            FeedChoice {
+                name: "fp".into(),
+                adsb: Some("feed.example:30004".into()),
+                mlat: None,
+                uuid: String::new(),
+            },
+            FeedChoice {
+                name: "lol".into(),
+                adsb: Some("in.example:30004".into()),
+                mlat: Some("in.example:31090".into()),
+                uuid: String::new(),
+            },
+        ]
+    }
+
+    #[test]
+    fn every_feed_gets_the_station_key() {
+        let (f, _) = resolve_feeds(feeds(), true, "k-1");
+        assert!(f.iter().all(|x| x.uuid == "k-1"));
+    }
+
+    #[test]
+    fn rendered_config_with_the_radio_is_valid_and_complete() {
+        let (feeds, _) = resolve_feeds(feeds(), true, "k-1");
+        let a = Answers {
+            name: "t".into(),
+            lat: 1.3,
+            lon: 103.8,
+            alt: "65m".into(),
+            input_beast: "127.0.0.1:30005".into(),
+            readsb_json: Some("state/readsb".into()),
+            readsb_prog: Some(readsb_program("/bin/sh", "state/readsb", 1.3, 103.8)),
+            radio_prog: Some(readsb_program("/bin/sh", "state/readsb", 1.3, 103.8)),
+            station_uuid: "k-1".into(),
+            feeds,
+            listen: None,
+        };
+        let out = render_toml(&a);
+        assert!(out.contains("radio = \"/bin/sh --device-type rtlsdr"), "{out}");
+        assert!(out.contains("readsb = \"/bin/sh"), "{out}");
+        assert!(out.contains("--net-bi-port 30004"), "{out}");
+        assert!(out.contains("[results]\nbeast_connect = \"127.0.0.1:30004\""), "{out}");
+        assert!(check_rendered(&out).unwrap().is_empty(), "{:?}", check_rendered(&out));
+    }
+
+    #[test]
+    fn remote_receiver_writes_no_results_or_programs() {
+        let (feeds, _) = resolve_feeds(feeds(), false, "k-1");
+        let a = Answers {
+            name: "t".into(),
+            lat: 1.3,
+            lon: 103.8,
+            alt: "65m".into(),
+            input_beast: "10.0.0.2:30005".into(),
+            readsb_json: None,
+            readsb_prog: None,
+            radio_prog: None,
+            station_uuid: "k-1".into(),
+            feeds,
+            listen: None,
+        };
+        let out = render_toml(&a);
+        assert!(!out.contains("[results]") && !out.contains("[programs]"), "{out}");
+    }
 }
 
 /// Random UUID-shaped identifier from the system generator.

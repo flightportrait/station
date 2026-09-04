@@ -3,7 +3,9 @@
 # included) to a running station. Run as a normal user; sudo is used
 # where needed and the script says why before each use.
 #
-#   sh install.sh
+#   sh install.sh                 # the Station radio (rx), no readsb
+#   sh install.sh --build-readsb  # also build readsb from source as the
+#                                 # fallback radio (slow on a Pi 3)
 #
 # Idempotent: everything already present is detected and kept.
 set -e
@@ -14,15 +16,42 @@ case "$ARCH" in
     aarch64|x86_64) ;;
     *) echo "unsupported architecture: $ARCH"; exit 1 ;;
 esac
+BUILD_READSB=0
+for arg in "$@"; do
+    case "$arg" in
+        --build-readsb) BUILD_READSB=1 ;;
+        *) echo "unknown option: $arg"; exit 1 ;;
+    esac
+done
 
 echo "Station installer: $ARCH, into $HOME_DIR"
 mkdir -p "$HOME_DIR/state"
 
+# --- the radio's library and the dongle's driver ------------------------
+# rx links librtlsdr; the kernel's TV driver would otherwise claim the
+# dongle at boot, so it is blacklisted like every feeder image does.
+if dpkg -s librtlsdr0 >/dev/null 2>&1; then
+    echo "librtlsdr0: already installed"
+else
+    echo "librtlsdr0: installing (sudo runs apt)"
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq librtlsdr0 curl ca-certificates
+fi
+if [ -f /etc/modprobe.d/blacklist-rtlsdr.conf ]; then
+    echo "dvb driver: already blacklisted"
+else
+    echo "dvb driver: blacklisting the TV driver so the dongle is free (sudo writes it)"
+    printf 'blacklist dvb_usb_rtl28xxu\nblacklist rtl2832\nblacklist rtl2830\n' \
+        | sudo tee /etc/modprobe.d/blacklist-rtlsdr.conf >/dev/null
+    sudo modprobe -r dvb_usb_rtl28xxu rtl2832 rtl2830 2>/dev/null || true
+fi
+
 # --- binaries ----------------------------------------------------------
-# mlatc comes from the public release; stationd arrives beside this
-# script until its repo publishes releases too.
+# rx (the Station radio) and mlatc come from their public releases;
+# stationd arrives beside this script until its repo publishes releases.
 MLATC_RELEASE="https://github.com/flightportrait/mlatc/releases/latest/download"
-for bin in stationd mlatc; do
+RX_RELEASE="https://github.com/flightportrait/rx/releases/latest/download"
+for bin in stationd mlatc rx; do
     if [ -x "$HOME_DIR/$bin" ]; then
         echo "$bin: already installed"
     elif [ -x "$(dirname "$0")/$bin" ]; then
@@ -30,9 +59,17 @@ for bin in stationd mlatc; do
         echo "$bin: installed from alongside the script"
     elif [ "$bin" = "mlatc" ]; then
         echo "mlatc: downloading the release binary"
-        curl -fsSL -o "$HOME_DIR/mlatc" \
-            "$MLATC_RELEASE/mlatc-$ARCH-unknown-linux-musl"
+        curl -fsSL -o "$HOME_DIR/mlatc" "$MLATC_RELEASE/mlatc-$ARCH-unknown-linux-musl"
         chmod +x "$HOME_DIR/mlatc"
+    elif [ "$bin" = "rx" ]; then
+        echo "rx: downloading the release binary"
+        if curl -fsSL -o "$HOME_DIR/rx" "$RX_RELEASE/rx-$ARCH-unknown-linux-gnu"; then
+            chmod +x "$HOME_DIR/rx"
+        else
+            rm -f "$HOME_DIR/rx"
+            echo "rx: no release for $ARCH yet; readsb will be the radio"
+            BUILD_READSB=1
+        fi
     else
         echo "$bin: missing. Copy it next to this script (a static"
         echo "  $ARCH build; see docs/PI.md for the Docker one-liner)."
@@ -41,9 +78,12 @@ for bin in stationd mlatc; do
 done
 
 # --- readsb ------------------------------------------------------------
+# The fallback radio. readsb has no package repository; building it takes
+# ten minutes on a Pi 3, so it is only built on request, or when rx could
+# not be installed.
 if [ -x "$HOME_DIR/readsb" ] || command -v readsb >/dev/null 2>&1; then
     echo "readsb: already present"
-else
+elif [ "$BUILD_READSB" = 1 ]; then
     echo "readsb: building from source (sudo installs the build tools)"
     sudo apt-get update -qq
     sudo apt-get install -y -qq git build-essential libusb-1.0-0-dev \
@@ -53,6 +93,8 @@ else
     make -C /tmp/readsb-src -j"$(nproc)" RTLSDR=yes
     cp /tmp/readsb-src/readsb "$HOME_DIR/readsb"
     echo "readsb: built"
+else
+    echo "readsb: skipped (rx is the radio; add --build-readsb for a fallback)"
 fi
 
 # --- configuration -----------------------------------------------------
@@ -62,6 +104,7 @@ if [ -f "$HOME_DIR/station.toml" ]; then
 else
     # None yet: the service starts in setup mode and serves a browser
     # wizard on the LAN. (stationd --init is the terminal alternative.)
+    # The wizard finds rx beside stationd and readsb, if built, as well.
     NEEDS_SETUP=1
 fi
 

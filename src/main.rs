@@ -32,18 +32,22 @@ struct Cli {
     /// Interactive setup: write the configuration by answering questions.
     #[arg(long)]
     init: bool,
+    /// The Station radio (rx) binary for setup; found next to stationd or
+    /// at ~/station/rx when absent.
+    #[arg(long)]
+    radio: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     if cli.init {
-        return init::run(&cli.config);
+        return init::run(&cli.config, cli.radio.as_deref());
     }
     // No configuration file at all is not an error: it means first run.
     // The browser wizard writes one, and this process carries on with it.
     if !cli.check && !cli.config.exists() {
-        setup::serve(&cli.config).await?;
+        setup::serve(&cli.config, cli.radio.as_deref()).await?;
     }
     let text = std::fs::read_to_string(&cli.config)
         .with_context(|| format!("cannot read {}", cli.config.display()))?;

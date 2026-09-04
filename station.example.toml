@@ -33,4 +33,9 @@ listen = "127.0.0.1:8654"
 [programs]
 # Paths to the supervised binaries; the defaults find them on PATH.
 mlatc = "mlatc"
+# The radio for a local dongle: rx (the Station radio) with readsb as its
+# fallback, or readsb alone. Both take the same flags. With `radio` set,
+# readsb takes over after three crashes in ten minutes or fifteen silent
+# minutes, and the status page says so.
+# radio = "/home/station/station/rx --device-type rtlsdr --gain auto ..."
 # readsb = "/usr/bin/readsb --device-type rtlsdr ..."  # supervised when set

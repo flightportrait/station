@@ -18,11 +18,22 @@ const LISTEN: &str = "0.0.0.0:8654";
 const MAPLIBRE_JS: &str = include_str!("vendor/maplibre-gl.js");
 const MAPLIBRE_CSS: &str = include_str!("vendor/maplibre-gl.css");
 
+/// What this machine offers the wizard: the Station radio if installed,
+/// and the station key made once for this setup.
+pub struct Setup {
+    pub rx: Option<String>,
+    pub station_key: String,
+}
+
 /// Serve the wizard until a valid configuration is written, then return.
-pub async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
+pub async fn serve(config_path: &std::path::Path, radio: Option<&std::path::Path>) -> anyhow::Result<()> {
     let l = TcpListener::bind(LISTEN).await.map_err(|e| {
         anyhow::anyhow!("setup mode cannot listen on {LISTEN}: {e} (is another stationd running?)")
     })?;
+    let setup = Setup {
+        rx: init::find_rx(radio),
+        station_key: init::station_uuid(),
+    };
     announce();
     loop {
         let Ok((mut sock, _)) = l.accept().await else {
@@ -31,7 +42,7 @@ pub async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
         let Some((head, body)) = read_request(&mut sock).await else {
             continue;
         };
-        let (status, ctype, resp_body, done) = route(&head, &body, config_path);
+        let (status, ctype, resp_body, done) = route(&head, &body, config_path, &setup);
         let resp = format!(
             "HTTP/1.0 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\n\r\n{resp_body}",
             resp_body.len()
@@ -48,6 +59,7 @@ fn route(
     head: &str,
     body: &str,
     config_path: &std::path::Path,
+    setup: &Setup,
 ) -> (&'static str, &'static str, String, bool) {
     let ok = "200 OK";
     if head.starts_with("GET / ") {
@@ -60,10 +72,10 @@ fn route(
         return (ok, "text/css", MAPLIBRE_CSS.into(), false);
     }
     if head.starts_with("GET /setup/info") {
-        return (ok, "application/json", info_json(), false);
+        return (ok, "application/json", info_json(setup), false);
     }
     if head.starts_with("POST /setup") {
-        return match apply(body, config_path) {
+        return match apply(body, config_path, setup) {
             Ok((resp, done)) => (ok, "application/json", resp, done),
             Err(e) => (
                 "400 Bad Request",
@@ -122,10 +134,12 @@ async fn read_request(sock: &mut tokio::net::TcpStream) -> Option<(String, Strin
     Some((head, body))
 }
 
-fn info_json() -> String {
+fn info_json(setup: &Setup) -> String {
     serde_json::json!({
         "hostname": std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()).unwrap_or_default(),
         "sdr": init::detect_rtlsdr(),
+        "radio": setup.rx,
+        "station_key": setup.station_key,
         "catalog": init::CATALOG.iter().map(|a| serde_json::json!({
             "name": a.name, "adsb": a.adsb, "mlat": a.mlat,
             "note": a.note, "gives": a.gives, "url": a.url,
@@ -143,6 +157,10 @@ struct Submission {
     alt_m: f64,
     input: SubmissionInput,
     feeds: Vec<SubmissionFeed>,
+    /// The station key shown on the review card; the server's own when
+    /// absent.
+    #[serde(default)]
+    station_key: String,
 }
 
 #[derive(Deserialize)]
@@ -167,22 +185,46 @@ struct SubmissionFeed {
 
 /// One submission: build the same Answers the terminal wizard builds,
 /// validate with the same sentences, write on success.
-fn apply(body: &str, config_path: &std::path::Path) -> anyhow::Result<(String, bool)> {
+fn apply(body: &str, config_path: &std::path::Path, setup: &Setup) -> anyhow::Result<(String, bool)> {
     let sub: Submission = serde_json::from_str(body)?;
-    let (input_beast, readsb_json, readsb_prog) = if sub.input.mode == "sdr" {
-        let path = if sub.input.readsb_path.trim().is_empty() {
-            "/usr/local/bin/readsb"
-        } else {
-            sub.input.readsb_path.trim()
-        };
+    let station_uuid = if sub.station_key.trim().len() == 36 {
+        sub.station_key.trim().to_string()
+    } else {
+        setup.station_key.clone()
+    };
+    let (input_beast, readsb_json, readsb_prog, radio_prog) = if sub.input.mode == "sdr" {
         let json_dir = "state/readsb".to_string();
+        // The Station radio when installed; readsb beside it as the
+        // fallback, or alone when there is no radio.
+        let radio_prog = setup
+            .rx
+            .as_deref()
+            .map(|p| init::readsb_program(p, &json_dir, sub.lat, sub.lon));
+        let readsb_path = if !sub.input.readsb_path.trim().is_empty() {
+            Some(sub.input.readsb_path.trim().to_string())
+        } else if radio_prog.is_none() {
+            Some("/usr/local/bin/readsb".to_string())
+        } else {
+            ["/usr/local/bin/readsb", "/usr/bin/readsb"]
+                .iter()
+                .find(|p| std::path::Path::new(p).exists())
+                .map(|p| p.to_string())
+                .or_else(|| {
+                    std::env::var_os("HOME").map(|h| {
+                        std::path::Path::new(&h).join("station/readsb").display().to_string()
+                    })
+                })
+                .filter(|p| std::path::Path::new(p).exists())
+        };
+        let readsb_prog = readsb_path.map(|p| init::readsb_program(&p, &json_dir, sub.lat, sub.lon));
         (
             "127.0.0.1:30005".to_string(),
             Some(json_dir.clone()),
-            Some(init::readsb_program(path, &json_dir, sub.lat, sub.lon)),
+            readsb_prog,
+            radio_prog,
         )
     } else {
-        (sub.input.beast.trim().to_string(), None, None)
+        (sub.input.beast.trim().to_string(), None, None, None)
     };
     let non_empty = |s: Option<String>| s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     let feeds = sub
@@ -195,7 +237,14 @@ fn apply(body: &str, config_path: &std::path::Path) -> anyhow::Result<(String, b
             uuid: f.uuid.trim().to_string(),
         })
         .collect();
-    let (feeds, notes) = init::resolve_feeds(feeds, readsb_prog.is_some());
+    let (feeds, mut notes) = init::resolve_feeds(
+        feeds,
+        readsb_prog.is_some() || radio_prog.is_some(),
+        &station_uuid,
+    );
+    notes.push(format!(
+        "Station key {station_uuid} — keep it; it marks these feeds as yours."
+    ));
     if feeds.is_empty() {
         let mut problems =
             vec!["No usable feeds: pick at least one aggregator this station can send to.".into()];
@@ -213,6 +262,8 @@ fn apply(body: &str, config_path: &std::path::Path) -> anyhow::Result<(String, b
         input_beast,
         readsb_json,
         readsb_prog,
+        radio_prog,
+        station_uuid,
         feeds,
         listen: Some(LISTEN.into()),
     };
@@ -555,7 +606,7 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 <script src="/vendor/maplibre-gl.js"></script>
 <script>
 let map, pin, catalog = [], active = 0;
-let sdrFound = false, remoteChosen = false;
+let sdrFound = false, remoteChosen = false, radioPath = '', stationKey = '';
 const steps = [...document.querySelectorAll('.step')];
 const LAST_Q = 6;
 
@@ -640,7 +691,9 @@ function renderReceiver() {
     ? 'RTL-SDR dongle found on this machine'
     : 'Looking for an RTL-SDR dongle…';
   document.getElementById('sdrgives').textContent = sdrFound
-    ? 'stationd runs the radio software (readsb) for it and feeds from there'
+    ? (radioPath
+        ? 'stationd runs the Station radio for it and feeds from there'
+        : 'stationd runs the radio software (readsb) for it and feeds from there')
     : 'none found yet — plug one in; this page notices by itself';
 }
 document.getElementById('optsdr').addEventListener('click', () => {
@@ -861,6 +914,8 @@ document.getElementById('customcard').addEventListener('click', e => {
 fetch('/setup/info').then(r => r.json()).then(d => {
   catalog = d.catalog;
   sdrFound = d.sdr;
+  radioPath = d.radio || '';
+  stationKey = d.station_key || '';
   remoteChosen = false;
   renderReceiver();
   if (d.hostname && !document.getElementById('name').value)
@@ -908,6 +963,7 @@ function buildSummary() {
     + ', antenna at ' + ((isNaN(g)?0:g)+(isNaN(m)?0:m)).toFixed(0) + ' m.');
   p('Frames from ' + src + '.');
   p('Feeding ' + feeds.map(f => f.name).join(', ') + '.');
+  if (stationKey) p('Station key ' + stationKey + ' — keep it; it marks these feeds as yours.');
 }
 
 document.getElementById('go').onclick = async () => {
@@ -920,6 +976,7 @@ document.getElementById('go').onclick = async () => {
     alt_m: (isNaN(g) ? 0 : g) + (isNaN(m) ? 0 : m),
     input: { mode: mode(), beast: document.getElementById('beast').value.trim() },
     feeds: pickedFeeds(),
+    station_key: stationKey,
   };
   let d;
   try {
