@@ -26,6 +26,8 @@ pub struct StatusServer {
     pub feeds: Vec<(String, String)>,
     pub readsb_configured: bool,
     pub shared: Arc<Shared>,
+    /// What runs in the radio slot, when stationd runs a radio with a fallback.
+    pub radio: Option<crate::supervise::RadioShared>,
 }
 
 /// The stats file name mlatc uses for a server address; must mirror
@@ -118,6 +120,7 @@ impl StatusServer {
         drop(snap);
         let m = self.shared.metrics.lock().unwrap();
         let feeds = self.feed_views();
+        let radio = self.radio.as_ref().map(|r| r.lock().unwrap().clone());
         let view = View {
             readsb_configured: self.readsb_configured,
             readsb_age_s: readsb_age,
@@ -126,6 +129,7 @@ impl StatusServer {
             rate_baseline: m.baseline_rate(),
             feeds,
             failing_children: failing,
+            radio_fallback: radio.as_ref().and_then(|r| r.fallback),
         };
         let diagnostics = diagnose(&view);
         let unix = SystemTime::now()
@@ -137,6 +141,7 @@ impl StatusServer {
             "now_unix": unix,
             "started_unix": self.started_unix,
             "children": children,
+            "radio": radio,
             "receiver": {
                 "configured": self.readsb_configured,
                 "json_age_s": view.readsb_age_s,

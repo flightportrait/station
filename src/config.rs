@@ -78,8 +78,14 @@ impl Default for Status {
 pub struct Programs {
     #[serde(default = "default_mlatc")]
     pub mlatc: String,
+    /// readsb command line. With `radio` set it is the fallback; alone it
+    /// is the radio.
     #[serde(default)]
     pub readsb: Option<String>,
+    /// The Station radio (rx) command line. It takes readsb's flags, so it
+    /// runs in readsb's slot with the same feed arguments.
+    #[serde(default)]
+    pub radio: Option<String>,
 }
 
 fn default_mlatc() -> String {
@@ -91,6 +97,7 @@ impl Default for Programs {
         Programs {
             mlatc: default_mlatc(),
             readsb: None,
+            radio: None,
         }
     }
 }
@@ -181,14 +188,34 @@ impl Config {
                 }
             }
         }
-        if self.feeds.iter().any(|f| f.adsb.is_some()) && self.programs.readsb.is_none() {
+        if self.feeds.iter().any(|f| f.adsb.is_some()) && !self.runs_radio() {
             p.push(
-                "a feed has an adsb destination but stationd does not run readsb \
-                 ([programs].readsb is unset): the ADS-B data would never be sent. \
-                 Either let stationd run readsb, or add the --net-connector to \
-                 your own readsb and drop the adsb line here."
+                "a feed has an adsb destination but stationd does not run a radio \
+                 ([programs].radio and [programs].readsb are unset): the ADS-B data \
+                 would never be sent. Either let stationd run the radio, or add the \
+                 --net-connector to your own readsb and drop the adsb line here."
                     .into(),
             );
+        }
+        if let Some(r) = &self.programs.radio {
+            match r.split_whitespace().next() {
+                None => p.push("programs.radio is empty: give the path of the rx binary.".into()),
+                Some(path) => match std::fs::metadata(path) {
+                    Err(_) => p.push(format!(
+                        "programs.radio names \"{path}\", which does not exist: install rx \
+                         there, or remove the line to run readsb alone."
+                    )),
+                    Ok(m) => {
+                        use std::os::unix::fs::PermissionsExt;
+                        if m.permissions().mode() & 0o111 == 0 {
+                            p.push(format!(
+                                "programs.radio names \"{path}\", which is not executable: \
+                                 chmod +x it."
+                            ));
+                        }
+                    }
+                },
+            }
         }
         let mlat_feeds = || self.feeds.iter().filter(|f| f.mlat.is_some());
         let with_uuid = mlat_feeds().filter(|f| f.uuid.is_some()).count();
@@ -213,6 +240,11 @@ impl Config {
             ));
         }
         p
+    }
+
+    /// Whether stationd runs a radio itself (rx, or readsb).
+    pub fn runs_radio(&self) -> bool {
+        self.programs.radio.is_some() || self.programs.readsb.is_some()
     }
 
     /// The mlatc invocation this configuration means.
@@ -363,6 +395,24 @@ beast = "nonsense"
                 "feed.example,30004,beast_reduce_plus_out,uuid=u-1".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn radio_alone_serves_adsb_feeds() {
+        let c = cfg(&format!(
+            "{GOOD}\n[[feed]]\nname = \"fp\"\nadsb = \"feed.example:30004\"\n\n[programs]\nradio = \"/bin/sh --gain auto\"\n"
+        ));
+        assert!(c.problems().is_empty(), "{:?}", c.problems());
+    }
+
+    #[test]
+    fn missing_radio_binary_is_a_sentence() {
+        let c = cfg(&format!(
+            "{GOOD}\n[programs]\nradio = \"/nonexistent/rx --gain auto\"\n"
+        ));
+        let p = c.problems();
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(p[0].contains("does not exist"));
     }
 
     #[test]

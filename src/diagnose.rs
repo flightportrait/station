@@ -34,6 +34,8 @@ pub struct View {
     pub feeds: Vec<FeedView>,
     /// (child name, restarts) for children currently in backoff.
     pub failing_children: Vec<(String, u64)>,
+    /// Set while readsb runs in place of the Station radio.
+    pub radio_fallback: Option<crate::supervise::FallbackReason>,
 }
 
 pub struct FeedView {
@@ -55,6 +57,29 @@ pub fn diagnose(v: &View) -> Vec<Diagnostic> {
             action: "Read its lines in the stationd journal; the last one \
                      before each exit usually names the cause."
                 .into(),
+        });
+    }
+
+    if let Some(reason) = v.radio_fallback {
+        use crate::supervise::FallbackReason;
+        let (sentence, action) = match reason {
+            FallbackReason::Crashes => (
+                "The Station radio failed; readsb is running instead.",
+                "The station keeps feeding. Read the radio's lines in the \
+                 stationd journal; the last one before each exit usually names \
+                 the cause. It is tried again in an hour.",
+            ),
+            FallbackReason::Silence => (
+                "The Station radio heard nothing for 15 minutes; readsb is running instead.",
+                "If readsb hears aircraft now, the radio is at fault: report it. \
+                 If readsb hears nothing either, check the antenna and the dongle.",
+            ),
+        };
+        out.push(Diagnostic {
+            id: "radio-fallback",
+            severity: Severity::Warning,
+            sentence: sentence.into(),
+            action: action.into(),
         });
     }
 
@@ -165,12 +190,24 @@ mod tests {
                 },
             ],
             failing_children: vec![],
+            radio_fallback: None,
         }
     }
 
     #[test]
     fn healthy_station_says_nothing() {
         assert!(diagnose(&healthy()).is_empty());
+    }
+
+    #[test]
+    fn a_fallback_is_one_sentence_with_its_reason() {
+        let mut v = healthy();
+        v.radio_fallback = Some(crate::supervise::FallbackReason::Silence);
+        let d = diagnose(&v);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].id, "radio-fallback");
+        assert!(d[0].sentence.contains("readsb is running instead"));
+        assert!(d[0].sentence.contains("15 minutes"));
     }
 
     #[test]

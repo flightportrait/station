@@ -78,21 +78,42 @@ async fn main() -> Result<()> {
             shutdown_rx.clone(),
         );
     }
-    if let Some(readsb) = &cfg.programs.readsb {
-        let mut parts = readsb.split_whitespace().map(String::from);
-        let cmd = parts.next().context("programs.readsb is empty")?;
+    // The radio slot: rx when configured, readsb as its fallback (or alone).
+    let spec_for = |name: &str, line: &str| -> Result<supervise::ChildSpec> {
+        let mut parts = line.split_whitespace().map(String::from);
+        let cmd = parts.next().with_context(|| format!("programs.{name} is empty"))?;
         let mut args: Vec<String> = parts.collect();
         args.extend(cfg.readsb_feed_args());
-        supervise::spawn(
-            supervise::ChildSpec {
-                name: "readsb".into(),
-                cmd,
-                args,
-            },
-            statuses.clone(),
-            shutdown_rx.clone(),
-        );
-    }
+        Ok(supervise::ChildSpec {
+            name: name.into(),
+            cmd,
+            args,
+        })
+    };
+    let radio_health = supervise::RadioHealth::new();
+    let radio_state: Option<supervise::RadioShared> = match (&cfg.programs.radio, &cfg.programs.readsb) {
+        (Some(radio), fallback) => {
+            let state = Arc::new(Mutex::new(supervise::RadioState {
+                running: "radio",
+                fallback: None,
+                fell_back_unix: None,
+            }));
+            supervise::spawn_radio(
+                spec_for("radio", radio)?,
+                fallback.as_deref().map(|r| spec_for("readsb", r)).transpose()?,
+                statuses.clone(),
+                shutdown_rx.clone(),
+                radio_health.clone(),
+                state.clone(),
+            );
+            Some(state)
+        }
+        (None, Some(readsb)) => {
+            supervise::spawn(spec_for("readsb", readsb)?, statuses.clone(), shutdown_rx.clone());
+            None
+        }
+        (None, None) => None,
+    };
 
     let metrics_path = cli.state_dir.join("metrics.json");
     let shared = Arc::new(status::Shared {
@@ -105,16 +126,23 @@ async fn main() -> Result<()> {
         let shared = shared.clone();
         let (lat, lon) = (cfg.station.lat, cfg.station.lon);
         let mpath = metrics_path.clone();
+        let health = radio_health.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
             let mut last_minute = 0u64;
             let mut last_save = 0u64;
+            let mut last_messages: Option<u64> = None;
             loop {
                 tick.tick().await;
                 let Some(snap) = model::read_snapshot(&dir, lat, lon) else {
                     *shared.snapshot.lock().unwrap() = None;
                     continue;
                 };
+                // The radio is alive when its message counter grows.
+                if last_messages.is_none_or(|m| snap.messages_total > m) {
+                    health.progressed();
+                }
+                last_messages = Some(snap.messages_total);
                 let unix = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
@@ -156,6 +184,7 @@ async fn main() -> Result<()> {
             .collect(),
         readsb_configured: cfg.input.readsb_json.is_some(),
         shared: shared.clone(),
+        radio: radio_state,
     };
     let listen = cfg.status.listen.clone();
     tokio::spawn(server.run(listen));
