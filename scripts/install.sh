@@ -78,6 +78,13 @@ detect_receiver() {
         DETECTED_KIND="readsb"; DETECTED_WHAT="a readsb started by hand"
         return 0
     fi
+    # Installed but not running, or no systemctl to ask: the files say so.
+    for u in readsb dump1090-fa; do
+        if [ -r "/etc/default/$u" ] && { [ -f "/etc/systemd/system/$u.service" ] || [ -f "/lib/systemd/system/$u.service" ]; }; then
+            DETECTED_KIND="$u"; DETECTED_UNIT="$u"; DETECTED_WHAT="$u (installed)"
+            return 0
+        fi
+    done
     return 1
 }
 
@@ -196,6 +203,14 @@ print_add_lines() {
             echo "ultrafeeder: add this entry to ULTRAFEEDER_CONFIG (entries are"
             echo "separated by ;), then recreate the container"
             echo
+            echo "  adsb,$FP_ADSB,uuid=$key"
+            ;;
+        "")
+            echo "No receiver was found here. The lines, for when there is one:"
+            echo
+            echo "readsb, in NET_OPTIONS of /etc/default/readsb:"
+            echo "  --net-connector $FP_ADSB,uuid=$key"
+            echo "ultrafeeder, an entry in ULTRAFEEDER_CONFIG:"
             echo "  adsb,$FP_ADSB,uuid=$key"
             ;;
         adsbim)
@@ -363,6 +378,12 @@ elif detect_receiver; then
         print_add_lines "$KEY"
         exit 0
     fi
+fi
+if [ "$MODE" = add ]; then
+    # Nothing detected, but asked to add: print the lines anyway, install nothing.
+    choose_key
+    print_add_lines "$KEY"
+    exit 0
 fi
 
 echo "Station installer: $ARCH, into $HOME_DIR"
