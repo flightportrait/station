@@ -8,7 +8,7 @@ image exists (S4), the manual path is:
    "rustup target add aarch64-unknown-linux-musl &&
    RUSTFLAGS='-C linker=rust-lld' cargo build --release
    --target aarch64-unknown-linux-musl"`.
-   The same command in the mlat-bench workspace builds mlatc. Copy both
+   The same command in the flightportrait/mlatc repo builds mlatc. Copy both
    binaries to the Pi; they have no dependencies.
 2. Build readsb on the Pi (build-essential, librtlsdr-dev,
    libncurses-dev, zlib1g-dev, libzstd-dev, libusb-1.0-0-dev; then

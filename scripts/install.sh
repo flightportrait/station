@@ -21,7 +21,7 @@ mkdir -p "$HOME_DIR/state"
 # --- binaries ----------------------------------------------------------
 # mlatc comes from the public release; stationd arrives beside this
 # script until its repo publishes releases too.
-MLATC_RELEASE="https://github.com/yoanntlm/mlat-bench/releases/latest/download"
+MLATC_RELEASE="https://github.com/flightportrait/mlatc/releases/latest/download"
 for bin in stationd mlatc; do
     if [ -x "$HOME_DIR/$bin" ]; then
         echo "$bin: already installed"
