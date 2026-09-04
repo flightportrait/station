@@ -34,5 +34,28 @@ Raspberry Pi OS Lite; the manual version of what it does:
    it. The service test: reboot the Pi; everything returns with no
    hands.
 
+## Installer options
+
+`sh install.sh` on a machine that already runs a receiver (readsb,
+dump1090-fa, PiAware, FR24, an adsb.im image, or ultrafeeder in docker)
+stops before touching anything: the dongle can serve one program. It
+offers two doors, as a question on a terminal, as flags otherwise:
+
+- `--add`: install nothing; print the line that makes the existing
+  software feed FlightPortrait, with a station key, and exit.
+- `--replace`: stop and disable the existing receiver (its configuration
+  stays where it is), install the Station, and carry its feeds and keys
+  over into `~/station/station.imported.toml`, which the wizard and
+  `stationd --init` start from (`--import`).
+- `--print`: install nothing; print the manual path on one screen, for a
+  machine where the script cannot run.
+- `--station-key <uuid>` (or `STATION_KEY=` in the environment): use a
+  key you kept instead of a new one. On a terminal the installer asks
+  once before the wizard.
+- `--build-readsb`: also build readsb from source as the fallback radio.
+
+`stationd --init --import ~/station/station.imported.toml` and
+`stationd --station-key <uuid>` are the same options on the daemon.
+
 A Pi 3B runs the full stack in about 30 MB of RAM; rx takes a fifth of
 one core with collision recovery on.

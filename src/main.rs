@@ -36,18 +36,43 @@ struct Cli {
     /// at ~/station/rx when absent.
     #[arg(long)]
     radio: Option<std::path::PathBuf>,
+    /// Station key for setup: a UUID kept from before, instead of a new
+    /// one. The STATION_KEY environment variable does the same.
+    #[arg(long)]
+    station_key: Option<String>,
+    /// Feeds and key carried over from a previous receiver
+    /// (station.imported.toml, written by the installer): setup starts
+    /// from them.
+    #[arg(long)]
+    import: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let key_given = cli
+        .station_key
+        .clone()
+        .or_else(|| std::env::var("STATION_KEY").ok().filter(|k| !k.trim().is_empty()));
+    let key = match key_given {
+        Some(k) => Some(init::parse_station_key(&k).map_err(|e| anyhow::anyhow!("--station-key: {e}"))?),
+        None => None,
+    };
+    let imported = match &cli.import {
+        Some(p) if p.exists() => Some(init::Imported::read(p)?),
+        Some(p) => {
+            eprintln!("stationd: --import {}: no such file; starting from nothing", p.display());
+            None
+        }
+        None => None,
+    };
     if cli.init {
-        return init::run(&cli.config, cli.radio.as_deref());
+        return init::run(&cli.config, cli.radio.as_deref(), key.as_deref(), imported.as_ref());
     }
     // No configuration file at all is not an error: it means first run.
     // The browser wizard writes one, and this process carries on with it.
     if !cli.check && !cli.config.exists() {
-        setup::serve(&cli.config, cli.radio.as_deref()).await?;
+        setup::serve(&cli.config, cli.radio.as_deref(), key.as_deref(), imported.as_ref()).await?;
     }
     let text = std::fs::read_to_string(&cli.config)
         .with_context(|| format!("cannot read {}", cli.config.display()))?;

@@ -23,16 +23,28 @@ const MAPLIBRE_CSS: &str = include_str!("vendor/maplibre-gl.css");
 pub struct Setup {
     pub rx: Option<String>,
     pub station_key: String,
+    /// Feeds carried over from a previous receiver, when the installer
+    /// found one; the page starts from them.
+    pub imported: Option<init::Imported>,
 }
 
 /// Serve the wizard until a valid configuration is written, then return.
-pub async fn serve(config_path: &std::path::Path, radio: Option<&std::path::Path>) -> anyhow::Result<()> {
+pub async fn serve(
+    config_path: &std::path::Path,
+    radio: Option<&std::path::Path>,
+    key: Option<&str>,
+    imported: Option<&init::Imported>,
+) -> anyhow::Result<()> {
     let l = TcpListener::bind(LISTEN).await.map_err(|e| {
         anyhow::anyhow!("setup mode cannot listen on {LISTEN}: {e} (is another stationd running?)")
     })?;
     let setup = Setup {
         rx: init::find_rx(radio),
-        station_key: init::station_uuid(),
+        station_key: key
+            .map(String::from)
+            .or_else(|| imported.and_then(|i| i.station_key.clone()))
+            .unwrap_or_else(init::station_uuid),
+        imported: imported.cloned(),
     };
     announce();
     loop {
@@ -140,6 +152,17 @@ fn info_json(setup: &Setup) -> String {
         "sdr": init::detect_rtlsdr(),
         "radio": setup.rx,
         "station_key": setup.station_key,
+        // What a previous receiver on this machine fed, if the installer
+        // found one: catalog entries to tick (by index) with their keys,
+        // and the rest as extra cards.
+        "imported": setup.imported.as_ref().map(|imp| serde_json::json!({
+            "catalog": init::CATALOG.iter().enumerate().filter_map(|(i, a)| {
+                imp.matching(a).map(|f| serde_json::json!({ "i": i, "uuid": f.uuid }))
+            }).collect::<Vec<_>>(),
+            "extras": imp.extras().iter().map(|f| serde_json::json!({
+                "name": f.name, "adsb": f.adsb, "mlat": f.mlat, "uuid": f.uuid,
+            })).collect::<Vec<_>>(),
+        })),
         "catalog": init::CATALOG.iter().map(|a| serde_json::json!({
             "name": a.name, "adsb": a.adsb, "mlat": a.mlat,
             "note": a.note, "gives": a.gives, "url": a.url,
@@ -885,10 +908,17 @@ function tileFor(a, i) {
   return '<span class="tile" style="background:' + TILECOLORS[i % TILECOLORS.length] + '">' + letter + '</span>';
 }
 
+let extras = [];
 function pickedFeeds() {
   const out = [];
   document.querySelectorAll('#feeds input[type=checkbox]').forEach(c => {
     if (!c.checked) return;
+    if (c.dataset.x !== undefined) {
+      const f = extras[+c.dataset.x];
+      out.push({ name: f.name, adsb: f.adsb, mlat: f.mlat,
+        uuid: (document.getElementById('xkey' + c.dataset.x) || {value:''}).value.trim() });
+      return;
+    }
     const a = catalog[+c.dataset.i];
     out.push({ name: a.name, adsb: a.adsb, mlat: a.mlat,
       uuid: (document.getElementById('key' + c.dataset.i) || {value:''}).value.trim() });
@@ -932,6 +962,31 @@ fetch('/setup/info').then(r => r.json()).then(d => {
       + '<p class="finehint">'+a.key_hint+' · <button type="button" class="linky genkey" data-i="'+i+'">generate one</button></p>'
       + '</div></label>';
   }).join('');
+  // A previous receiver's feeds: tick only those, carry their keys, and
+  // add the ones not on the list as cards of their own.
+  if (d.imported) {
+    const ticked = {};
+    d.imported.catalog.forEach(m => { ticked[m.i] = m.uuid || ''; });
+    document.querySelectorAll('#feeds input[type=checkbox]').forEach(c => {
+      const on = c.dataset.i in ticked;
+      c.checked = on; c.closest('.opt').classList.toggle('on', on);
+      if (on && ticked[c.dataset.i]) {
+        document.getElementById('key' + c.dataset.i).value = ticked[c.dataset.i];
+        document.getElementById('kf' + c.dataset.i).classList.add('open');
+      }
+    });
+    extras = d.imported.extras || [];
+    document.getElementById('feeds').insertAdjacentHTML('beforeend', extras.map((f, x) => {
+      const what = f.adsb && f.mlat ? 'ADS-B + MLAT' : (f.adsb ? 'ADS-B' : 'MLAT');
+      const where = [f.adsb, f.mlat].filter(Boolean).join(', ');
+      return '<label class="opt on"><input type="checkbox" data-x="'+x+'" checked>'
+        + '<span class="t"><span class="tile" style="background:var(--line);color:var(--ink)">'
+        + f.name.charAt(0).toUpperCase() + '</span><b>'+f.name+'</b></span>'
+        + '<span class="gives">'+what+' — kept from your previous receiver: '+where+'</span>'
+        + '<div class="keyfield open" id="xkf'+x+'"><input type="text" id="xkey'+x+'" value="'+(f.uuid||'')+'" placeholder="station key (a UUID)" autocomplete="off"></div>'
+        + '</label>';
+    }).join(''));
+  }
   document.querySelectorAll('#feeds input[type=checkbox]').forEach(c =>
     c.addEventListener('change', () =>
       c.closest('.opt').classList.toggle('on', c.checked)));

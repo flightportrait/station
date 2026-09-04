@@ -88,13 +88,18 @@ pub struct Answers {
     pub listen: Option<String>,
 }
 
-pub fn run(config_path: &std::path::Path, radio: Option<&std::path::Path>) -> anyhow::Result<()> {
+pub fn run(
+    config_path: &std::path::Path,
+    radio: Option<&std::path::Path>,
+    key: Option<&str>,
+    imported: Option<&Imported>,
+) -> anyhow::Result<()> {
     let fancy = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let rx = find_rx(radio);
     let answers = if fancy {
-        gather_fancy(rx.as_deref())?
+        gather_fancy(rx.as_deref(), key, imported)?
     } else {
-        gather_plain(rx.as_deref())?
+        gather_plain(rx.as_deref(), key, imported)?
     };
     let Some(a) = answers else {
         println!("Nothing written.");
@@ -156,6 +161,106 @@ pub fn find_rx(explicit: Option<&std::path::Path>) -> Option<String> {
         let m = std::fs::metadata(&p).ok()?;
         (m.is_file() && m.permissions().mode() & 0o111 != 0).then(|| p.display().to_string())
     })
+}
+
+/// A station key as typed by a person: 36 characters, 8-4-4-4-12 hex.
+/// Returns it lowercased, or a sentence saying what is wrong.
+pub fn parse_station_key(s: &str) -> Result<String, String> {
+    let k = s.trim().to_ascii_lowercase();
+    let groups: Vec<&str> = k.split('-').collect();
+    let shape = [8usize, 4, 4, 4, 12];
+    let ok = groups.len() == 5
+        && groups
+            .iter()
+            .zip(shape.iter())
+            .all(|(g, &n)| g.len() == n && g.chars().all(|c| c.is_ascii_hexdigit()));
+    if ok {
+        Ok(k)
+    } else {
+        Err(format!(
+            "\"{}\" is not a station key: 36 characters like 123e4567-e89b-12d3-a456-426614174000",
+            s.trim()
+        ))
+    }
+}
+
+/// Feeds and a key carried over from a receiver this machine ran before
+/// (the installer writes station.imported.toml from readsb's or
+/// ultrafeeder's configuration). Setup starts from it instead of from
+/// nothing.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+pub struct Imported {
+    #[serde(default)]
+    pub station_key: Option<String>,
+    #[serde(default, rename = "feed")]
+    pub feeds: Vec<ImportedFeed>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ImportedFeed {
+    pub name: String,
+    #[serde(default)]
+    pub adsb: Option<String>,
+    #[serde(default)]
+    pub mlat: Option<String>,
+    #[serde(default)]
+    pub uuid: Option<String>,
+}
+
+impl Imported {
+    pub fn read(path: &std::path::Path) -> anyhow::Result<Imported> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
+        Imported::parse(&text).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))
+    }
+
+    pub fn parse(text: &str) -> anyhow::Result<Imported> {
+        let mut imp: Imported = toml::from_str(text).map_err(|e| anyhow::anyhow!("does not parse: {e}"))?;
+        if let Some(k) = imp.station_key.take() {
+            imp.station_key = Some(parse_station_key(&k).map_err(|e| anyhow::anyhow!("{e}"))?);
+        }
+        imp.feeds
+            .retain(|f| !f.name.trim().is_empty() && (f.adsb.is_some() || f.mlat.is_some()));
+        Ok(imp)
+    }
+
+    /// The feeds as setup choices.
+    pub fn choices(&self) -> Vec<FeedChoice> {
+        self.feeds
+            .iter()
+            .map(|f| FeedChoice {
+                name: f.name.trim().to_string(),
+                adsb: f.adsb.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+                mlat: f.mlat.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+                uuid: f.uuid.as_ref().map(|s| s.trim().to_string()).unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// The imported feed that is this catalog entry, if any: same name, or
+    /// the same host on either endpoint.
+    pub fn matching(&self, a: &Aggregator) -> Option<FeedChoice> {
+        fn host(s: &str) -> String {
+            s.rsplit_once(':').map(|(h, _)| h.to_string()).unwrap_or_else(|| s.to_string())
+        }
+        self.choices().into_iter().find(|f| {
+            f.name.eq_ignore_ascii_case(a.name)
+                || matches!((&f.adsb, a.adsb), (Some(x), Some(y)) if host(x) == host(y))
+                || matches!((&f.mlat, a.mlat), (Some(x), Some(y)) if host(x) == host(y))
+        })
+    }
+
+    /// Imported feeds that are not in the catalog.
+    pub fn extras(&self) -> Vec<FeedChoice> {
+        let matched: Vec<String> = CATALOG
+            .iter()
+            .filter_map(|a| self.matching(a).map(|m| m.name))
+            .collect();
+        self.choices()
+            .into_iter()
+            .filter(|f| !matched.contains(&f.name))
+            .collect()
+    }
 }
 
 /// The station key: one UUID for every feed, so each network sees one
@@ -221,12 +326,28 @@ pub fn resolve_feeds(
 
 // --- terminal flow ------------------------------------------------------
 
-fn gather_fancy(rx: Option<&str>) -> anyhow::Result<Option<Answers>> {
+/// The key setup starts from: the one given, else the imported one, else
+/// a new one.
+fn starting_key(key: Option<&str>, imported: Option<&Imported>) -> String {
+    key.map(String::from)
+        .or_else(|| imported.and_then(|i| i.station_key.clone()))
+        .unwrap_or_else(station_uuid)
+}
+
+fn gather_fancy(
+    rx: Option<&str>,
+    key: Option<&str>,
+    imported: Option<&Imported>,
+) -> anyhow::Result<Option<Answers>> {
     use dialoguer::{theme::ColorfulTheme, Confirm, Input, MultiSelect, Select};
     let th = ColorfulTheme::default();
-    let station_uuid = station_uuid();
+    let station_uuid = starting_key(key, imported);
 
     println!("Station setup — a few questions, then a working station.\n");
+    if let Some(i) = imported {
+        let names: Vec<&str> = i.feeds.iter().map(|f| f.name.as_str()).collect();
+        println!("Starting from the feeds your previous receiver had: {}.\n", names.join(", "));
+    }
 
     let name: String = Input::with_theme(&th)
         .with_prompt("Station name (MLAT servers identify you by this)")
@@ -328,11 +449,15 @@ fn gather_fancy(rx: Option<&str>) -> anyhow::Result<Option<Answers>> {
             format!("{}  ({what}) — {}", a.name, a.note)
         })
         .collect();
+    let defaults: Vec<bool> = CATALOG
+        .iter()
+        .map(|a| imported.is_none_or(|i| i.matching(a).is_some()))
+        .collect();
     let picked = loop {
         let p = MultiSelect::with_theme(&th)
             .with_prompt("Feed")
             .items(&items)
-            .defaults(&vec![true; items.len()])
+            .defaults(&defaults)
             .interact()?;
         if !p.is_empty() {
             break p;
@@ -343,11 +468,16 @@ fn gather_fancy(rx: Option<&str>) -> anyhow::Result<Option<Answers>> {
     let mut feeds: Vec<FeedChoice> = Vec::new();
     for i in picked {
         let a = &CATALOG[i];
+        let had = imported
+            .and_then(|imp| imp.matching(a))
+            .map(|f| f.uuid)
+            .unwrap_or_default();
         let uuid: String = Input::with_theme(&th)
             .with_prompt(format!(
                 "Station key for {}, if they gave you one (Enter = none)",
                 a.name
             ))
+            .default(had)
             .allow_empty(true)
             .interact_text()?;
         feeds.push(FeedChoice {
@@ -356,6 +486,14 @@ fn gather_fancy(rx: Option<&str>) -> anyhow::Result<Option<Answers>> {
             mlat: a.mlat.map(String::from),
             uuid: uuid.trim().to_string(),
         });
+    }
+    for f in imported.map(|i| i.extras()).unwrap_or_default() {
+        println!(
+            "  kept from before: {} ({})",
+            f.name,
+            f.adsb.as_deref().or(f.mlat.as_deref()).unwrap_or("")
+        );
+        feeds.push(f);
     }
     while Confirm::with_theme(&th)
         .with_prompt("Add an aggregator not on the list?")
@@ -451,8 +589,12 @@ fn ask_custom_feed(th: &dialoguer::theme::ColorfulTheme) -> anyhow::Result<Optio
 
 // --- piped flow ---------------------------------------------------------
 
-fn gather_plain(rx: Option<&str>) -> anyhow::Result<Option<Answers>> {
-    let station_uuid = station_uuid();
+fn gather_plain(
+    rx: Option<&str>,
+    key: Option<&str>,
+    imported: Option<&Imported>,
+) -> anyhow::Result<Option<Answers>> {
+    let station_uuid = starting_key(key, imported);
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
     let mut ask = |prompt: &str, default: &str| -> String {
@@ -542,7 +684,10 @@ fn gather_plain(rx: Option<&str>) -> anyhow::Result<Option<Answers>> {
         println!("  {}. {} ({what}) — {}", i + 1, a.name, a.note);
     }
     println!("  {}. somewhere else", CATALOG.len() + 1);
-    let mut feeds: Vec<FeedChoice> = Vec::new();
+    let mut feeds: Vec<FeedChoice> = imported.map(|i| i.choices()).unwrap_or_default();
+    for f in &feeds {
+        println!("  kept from before: {}", f.name);
+    }
     loop {
         let done_hint = if feeds.is_empty() {
             ""
@@ -812,6 +957,56 @@ mod tests {
         };
         let out = render_toml(&a);
         assert!(!out.contains("[results]") && !out.contains("[programs]"), "{out}");
+    }
+
+    #[test]
+    fn station_key_shape() {
+        assert_eq!(
+            parse_station_key(" D5FA1765-183B-4227-998A-9E260D7A2F40 ").unwrap(),
+            "d5fa1765-183b-4227-998a-9e260d7a2f40"
+        );
+        for bad in ["", "d5fa1765", "d5fa1765-183b-4227-998a-9e260d7a2f4g", "d5fa1765183b4227998a9e260d7a2f40"] {
+            assert!(parse_station_key(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn import_file_prefills_catalog_and_extras() {
+        let imp = Imported::parse(
+            r#"
+station_key = "d5fa1765-183b-4227-998a-9e260d7a2f40"
+
+[[feed]]
+name = "in.adsb.lol"
+adsb = "in.adsb.lol:30004"
+mlat = "in.adsb.lol:31090"
+uuid = "d5fa1765-183b-4227-998a-9e260d7a2f40"
+
+[[feed]]
+name = "feed.example.net"
+adsb = "feed.example.net:30004"
+
+[[feed]]
+name = "nothing"
+"#,
+        )
+        .unwrap();
+        assert_eq!(imp.station_key.as_deref(), Some("d5fa1765-183b-4227-998a-9e260d7a2f40"));
+        assert_eq!(imp.feeds.len(), 2, "a feed with no endpoint is dropped");
+        let lol = CATALOG.iter().find(|a| a.name == "adsb.lol").unwrap();
+        let m = imp.matching(lol).expect("adsb.lol matched by host");
+        assert_eq!(m.uuid, "d5fa1765-183b-4227-998a-9e260d7a2f40");
+        let fp = CATALOG.iter().find(|a| a.name == "FlightPortrait").unwrap();
+        assert!(imp.matching(fp).is_none());
+        let extras = imp.extras();
+        assert_eq!(extras.len(), 1);
+        assert_eq!(extras[0].name, "feed.example.net");
+    }
+
+    #[test]
+    fn import_rejects_a_bad_key() {
+        assert!(Imported::parse("station_key = \"nope\"\n").is_err());
+        assert!(Imported::parse("").unwrap().feeds.is_empty());
     }
 }
 

@@ -39,3 +39,11 @@ mlatc = "mlatc"
 # minutes, and the status page says so.
 # radio = "/home/station/station/rx --device-type rtlsdr --gain auto ..."
 # readsb = "/usr/bin/readsb --device-type rtlsdr ..."  # supervised when set
+
+# Setup options (not part of this file): `stationd --station-key <uuid>`
+# (or STATION_KEY in the environment) makes setup show a key you kept
+# instead of a new one; `stationd --import station.imported.toml` starts
+# setup from the feeds and key of a receiver this machine ran before.
+# The installer writes that file (`sh install.sh --replace`) from
+# readsb's or ultrafeeder's configuration: [[feed]] blocks as above plus
+# `station_key = "..."` at the top.
