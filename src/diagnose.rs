@@ -44,6 +44,11 @@ pub struct FeedView {
     pub stats_age_s: Option<f64>,
     pub bad_sync: bool,
     pub clock_resets: u64,
+    /// ADS-B destination: Some(true) when a TCP connection to it is
+    /// established right now, Some(false) when not, None without one.
+    pub adsb_connected: Option<bool>,
+    /// The feed has an MLAT server.
+    pub has_mlat: bool,
 }
 
 pub fn diagnose(v: &View) -> Vec<Diagnostic> {
@@ -181,13 +186,17 @@ mod tests {
                     stats_age_s: Some(10.0),
                     bad_sync: false,
                     clock_resets: 0,
-                },
+                adsb_connected: None,
+                    has_mlat: true,
+            },
                 FeedView {
                     name: "b".into(),
                     stats_age_s: Some(12.0),
                     bad_sync: false,
                     clock_resets: 0,
-                },
+                adsb_connected: None,
+                    has_mlat: true,
+            },
             ],
             failing_children: vec![],
             radio_fallback: None,

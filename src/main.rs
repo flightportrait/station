@@ -206,9 +206,10 @@ async fn main() -> Result<()> {
         feeds: cfg
             .feeds
             .iter()
-            .filter_map(|f| {
-                let mlat = f.mlat.as_ref()?;
-                Some((f.name.clone(), status::stats_file_for(mlat, n_mlat)))
+            .map(|f| status::FeedSpec {
+                name: f.name.clone(),
+                adsb: f.adsb.clone(),
+                mlat_stats_file: f.mlat.as_ref().map(|m| status::stats_file_for(m, n_mlat)),
             })
             .collect(),
         readsb_configured: cfg.input.readsb_json.is_some(),

@@ -626,16 +626,6 @@ const SETUP_PAGE: &str = r##"<!doctype html>
   </div>
 </section>
 
-<section class="step center" data-step="6" hidden>
-  <svg class="bigmark" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#221f1a"/><path d="M10.5 36Q9 35 10.74 34.54L27.13 30.23Q28 30 28.42 29.21L35.58 15.79Q36 15 36.88 15.18L40.12 15.82Q41 16 40.75 16.87L37.25 29.13Q37 30 37.87 30.25L51 34C54 35 55 37 54.3 38.4Q54 39 53 38.94L36.9 38.05Q36 38 35.46 38.72L27.54 49.28Q27 50 26.13 49.78L23.87 49.22Q23 49 23.35 48.17L27.65 37.83Q28 37 27.11 37.14L15.89 38.86Q15 39 14.25 38.5Z" fill="#f5f1e6" transform="rotate(29 32 32)"/></svg>
-  <h1 id="donehead">Starting the station…</h1>
-  <p class="sub" id="donesub">Writing the configuration and starting the receiver.</p>
-  <div id="livecount" hidden>–</div>
-  <div id="livelbl" hidden>aircraft over you right now</div>
-  <div id="notes7"></div>
-  <div class="actions"><a class="cta" id="openpage" href="/" hidden>OPEN THE STATION PAGE</a></div>
-</section>
-
 </div></main>
 
 <script src="/vendor/maplibre-gl.js"></script>
@@ -1062,24 +1052,16 @@ document.getElementById('go').onclick = async () => {
     d = await (await fetch('/setup', { method: 'POST', body: JSON.stringify(body) })).json();
   } catch (e) { return showProblems(['The station did not answer. Is it still running?'], []); }
   if (!d.ok) return showProblems(d.problems || [], d.notes || []);
-  fill('notes7', d.notes || []);
-  show(6, false);
+  // The station page takes over as soon as stationd leaves setup mode;
+  // it is the one that shows what is really running.
+  document.getElementById('go').disabled = true;
+  document.getElementById('go').textContent = 'STARTING';
   const poll = setInterval(async () => {
     try {
       const s = await (await fetch('/status.json')).json();
-      if (!s.station) return;
-      document.getElementById('donehead').textContent = 'Your station is live.';
-      document.getElementById('donesub').textContent =
-        'It is feeding.';
-      document.getElementById('openpage').hidden = false;
-      const n = s.receiver && s.receiver.configured ? s.receiver.aircraft : null;
-      if (n != null) {
-        document.getElementById('livecount').hidden = false;
-        document.getElementById('livelbl').hidden = false;
-        document.getElementById('livecount').textContent = n;
-      }
+      if (s.station) { clearInterval(poll); location.replace('/'); }
     } catch (e) {}
-  }, 2000);
+  }, 1000);
 };
 
 function fill(id, items) {
