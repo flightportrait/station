@@ -923,7 +923,9 @@ fetch('/setup/info').then(r => r.json()).then(d => {
   }).join('');
   // A previous receiver's feeds: tick only those, carry their keys, and
   // add the ones not on the list as cards of their own.
-  if (d.imported) {
+  // (The installer's file holds only a key on a fresh machine: nothing to
+  // carry over, every card stays ticked.)
+  if (d.imported && (d.imported.catalog.length || (d.imported.extras || []).length)) {
     const ticked = {};
     d.imported.catalog.forEach(m => { ticked[m.i] = m.uuid || ''; });
     document.querySelectorAll('#feeds input[type=checkbox]').forEach(c => {
