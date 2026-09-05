@@ -897,12 +897,12 @@ for (const id of ['lat','lon']) document.getElementById(id).addEventListener('ch
   const centre = (lat, lon, zoom) => { if (map) map.flyTo({ center: [lon, lat], zoom }); };
   const coarse = () => fetch('https://ipwho.is/').then(r => r.json()).then(d => {
     if (!d.success) throw 0;
-    centre(d.latitude, d.longitude, 11);
+    centre(d.latitude, d.longitude, 15);
   }).catch(() => { b.textContent = 'Location unavailable, find it on the map'; });
   b.onclick = () => {
     if (window.isSecureContext && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        p => centre(p.coords.latitude, p.coords.longitude, 16), coarse,
+        p => centre(p.coords.latitude, p.coords.longitude, 18), coarse,
         { enableHighAccuracy: true, timeout: 8000 });
     } else coarse();
   };
