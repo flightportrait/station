@@ -493,6 +493,8 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 <section class="step center" data-step="0">
   <svg class="bigmark" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#221f1a"/><path d="M10.5 36Q9 35 10.74 34.54L27.13 30.23Q28 30 28.42 29.21L35.58 15.79Q36 15 36.88 15.18L40.12 15.82Q41 16 40.75 16.87L37.25 29.13Q37 30 37.87 30.25L51 34C54 35 55 37 54.3 38.4Q54 39 53 38.94L36.9 38.05Q36 38 35.46 38.72L27.54 49.28Q27 50 26.13 49.78L23.87 49.22Q23 49 23.35 48.17L27.65 37.83Q28 37 27.11 37.14L15.89 38.86Q15 39 14.25 38.5Z" fill="#f5f1e6" transform="rotate(29 32 32)"/></svg>
   <h1>Set up your station.</h1>
+  <p class="sub">Follow this interactive setup to start watching the aircraft above you.
+  This should only take 2 minutes.</p>
   <div class="actions"><button class="cta" data-next>BEGIN</button></div>
 </section>
 
