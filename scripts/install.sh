@@ -420,6 +420,10 @@ else
     echo "librtlsdr0: installing (sudo runs apt)"
     sudo apt-get update -qq
     sudo apt-get install -y -qq librtlsdr0 curl ca-certificates
+    # librtlsdr's udev rule opens the dongle to the plugdev group, but only
+    # for devices plugged in after it exists: apply it to the one already in.
+    sudo udevadm control --reload-rules 2>/dev/null || true
+    sudo udevadm trigger --subsystem-match=usb --action=add 2>/dev/null || true
 fi
 if [ -f /etc/modprobe.d/blacklist-rtlsdr.conf ]; then
     echo "dvb driver: already blacklisted"
@@ -427,6 +431,11 @@ else
     echo "dvb driver: blacklisting the TV driver so the dongle is free (sudo writes it)"
     printf 'blacklist dvb_usb_rtl28xxu\nblacklist rtl2832\nblacklist rtl2830\n' \
         | sudo tee /etc/modprobe.d/blacklist-rtlsdr.conf >/dev/null
+    # The module is "in use" while it holds the dongle: release the device
+    # first, then unload, so no reboot is needed.
+    for d in /sys/bus/usb/drivers/dvb_usb_rtl28xxu/*:*; do
+        [ -e "$d" ] && basename "$d" | sudo tee /sys/bus/usb/drivers/dvb_usb_rtl28xxu/unbind >/dev/null
+    done
     sudo modprobe -r dvb_usb_rtl28xxu rtl2832 rtl2830 2>/dev/null || true
 fi
 
