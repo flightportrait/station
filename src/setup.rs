@@ -513,14 +513,12 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 <section class="step" data-step="2" hidden>
   <p class="kicker caps">2 · Position</p>
   <h1>Where is the antenna?</h1>
-  <p class="sub">Zoom in and click its spot — rooftop precision matters,
-  because MLAT places other people's aircraft with it.
-  <button id="locate" class="ghost" hidden style="margin-left:8px">Use my location</button></p>
+  <p class="sub">Zoom in and press on its location. It has to be precise so try
+  your best to pinpoint its exact location.</p>
+  <p><button id="locate" class="ghost">Center on my location</button></p>
   <div id="map"></div>
-  <div class="row">
-    <input type="number" id="lat" step="any" placeholder="latitude">
-    <input type="number" id="lon" step="any" placeholder="longitude">
-  </div>
+  <input type="hidden" id="lat">
+  <input type="hidden" id="lon">
   <div class="actions">
     <button class="cta" data-next>CONTINUE</button>
     <span class="enter">press Enter ↵</span>
@@ -850,7 +848,7 @@ function initMap() {
     if (!isNaN(la) && !isNaN(lo)) setPos(la, lo, true);
   }).catch(() => {
     document.getElementById('map').textContent =
-      'No map here (offline?) — type coordinates below.';
+      'No map here. Is this machine online?';
   });
 }
 
@@ -891,12 +889,23 @@ for (const id of ['lat','lon']) document.getElementById(id).addEventListener('ch
   if (!isNaN(la) && !isNaN(lo)) setPos(la, lo, true);
 });
 
-if (window.isSecureContext && navigator.geolocation) {
+// Centre the map, never place the pin: the person still has to press the
+// exact spot. Precise browser location only exists on https; on the LAN's
+// plain http the fallback is the city from the network address.
+{
   const b = document.getElementById('locate');
-  b.hidden = false;
-  b.onclick = () => navigator.geolocation.getCurrentPosition(
-    p => setPos(p.coords.latitude, p.coords.longitude, true),
-    () => { b.textContent = 'Location unavailable — click the map'; });
+  const centre = (lat, lon, zoom) => { if (map) map.flyTo({ center: [lon, lat], zoom }); };
+  const coarse = () => fetch('https://ipwho.is/').then(r => r.json()).then(d => {
+    if (!d.success) throw 0;
+    centre(d.latitude, d.longitude, 11);
+  }).catch(() => { b.textContent = 'Location unavailable, find it on the map'; });
+  b.onclick = () => {
+    if (window.isSecureContext && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        p => centre(p.coords.latitude, p.coords.longitude, 16), coarse,
+        { enableHighAccuracy: true, timeout: 8000 });
+    } else coarse();
+  };
 }
 
 // ---- feeds ------------------------------------------------------------
