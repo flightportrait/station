@@ -474,6 +474,18 @@ const SETUP_PAGE: &str = r##"<!doctype html>
   label.small{display:flex;gap:8px;align-items:center;color:var(--quiet);
     margin-top:14px;cursor:pointer;font-size:15px}
   .finehint{color:var(--quiet);font-size:14px;margin-top:6px;max-width:52ch}
+  .sum{display:grid;grid-template-columns:max-content 1fr;gap:0 28px;margin:0 0 6px;
+    border-top:1px solid var(--line)}
+  .sum dt,.sum dd{margin:0;padding:12px 0;border-bottom:1px solid var(--line)}
+  .sum dt{color:var(--quiet);font-size:15px;padding-top:14px}
+  .sum .feedrow{display:flex;gap:8px 18px;flex-wrap:wrap}
+  .sum .feed{display:inline-flex;align-items:center;gap:7px}
+  .sum .feed .tile,.sum .feed .tile img,.sum .feed .tile svg{width:22px;height:22px;font-size:12px}
+  .sum code{font-family:ui-monospace,Menlo,monospace;font-size:15px;background:var(--card);
+    border:1px solid var(--line);padding:3px 7px;border-radius:4px;word-break:break-all}
+  .sum .finehint{margin-top:8px}
+  @media (max-width:600px){.sum{grid-template-columns:1fr;gap:0}
+    .sum dt{padding-bottom:2px;border-bottom:0}.sum dd{padding-top:0}}
 
   .fieldlbl{display:block;margin-bottom:2px;color:var(--quiet);font-size:14px}
   .groundline{margin-bottom:20px}
@@ -983,17 +995,39 @@ function buildSummary() {
   const g = parseFloat(document.getElementById('ground').value);
   const m = parseFloat(document.getElementById('mast').value);
   const feeds = pickedFeeds();
-  const src = mode() === 'sdr' ? 'the SDR dongle on this machine'
-    : document.getElementById('beast').value.trim();
-  document.getElementById('summary').innerHTML = '';
-  const p = (t) => { const e = document.createElement('p');
-    e.textContent = t; document.getElementById('summary').append(e); };
-  p(document.getElementById('name').value.trim() + ' at '
-    + document.getElementById('lat').value + ', ' + document.getElementById('lon').value
-    + ', antenna at ' + ((isNaN(g)?0:g)+(isNaN(m)?0:m)).toFixed(0) + ' m.');
-  p('Frames from ' + src + '.');
-  p('Feeding ' + feeds.map(f => f.name).join(', ') + '.');
-  if (stationKey) p('Station key ' + stationKey + '. Keep it; it marks these feeds as yours.');
+  const box = document.getElementById('summary');
+  box.innerHTML = '';
+  const dl = document.createElement('dl'); dl.className = 'sum';
+  const row = (label, value) => {
+    const dt = document.createElement('dt'); dt.textContent = label;
+    const dd = document.createElement('dd');
+    if (typeof value === 'string') dd.textContent = value; else dd.append(value);
+    dl.append(dt, dd);
+  };
+  row('Name', document.getElementById('name').value.trim());
+  row('Position', document.getElementById('lat').value + ', ' + document.getElementById('lon').value);
+  row('Antenna', ((isNaN(g)?0:g)+(isNaN(m)?0:m)).toFixed(0) + ' m above sea level');
+  row('Receiver', mode() === 'sdr' ? 'RTL-SDR dongle on this machine'
+    : 'Another machine, ' + document.getElementById('beast').value.trim());
+  const fr = document.createElement('div'); fr.className = 'feedrow';
+  feeds.forEach(f => {
+    const i = catalog.findIndex(a => a.name === f.name);
+    const el = document.createElement('span'); el.className = 'feed';
+    el.innerHTML = (i >= 0 ? tileFor(catalog[i], i)
+      : '<span class="tile" style="background:var(--line);color:var(--ink)">' + f.name.charAt(0).toUpperCase() + '</span>');
+    el.append(document.createTextNode(f.name));
+    fr.append(el);
+  });
+  row('Feeding', fr);
+  if (stationKey) {
+    const k = document.createElement('div');
+    const c = document.createElement('code'); c.textContent = stationKey;
+    const h = document.createElement('div'); h.className = 'finehint';
+    h.textContent = 'Keep it; it marks these feeds as yours.';
+    k.append(c, h);
+    row('Station key', k);
+  }
+  box.append(dl);
   showProblems(mode() === 'sdr' && !sdrFound
     ? ['No RTL-SDR dongle found on this machine. Plug it in; this page notices by itself.'] : [], []);
 }
