@@ -694,8 +694,8 @@ function searchAddress() {
   const q = box.value.trim();
   if (!q) return;
   box.disabled = true;
-  fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q),
-    { headers: { 'Accept-Language': navigator.language || 'en' } })
+  fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language='
+      + encodeURIComponent(navigator.language || 'en') + '&q=' + encodeURIComponent(q))
     .then(r => r.json()).then(d => {
       if (!d.length) return complain('No place found for that. Try the street and the city.');
       if (map) map.flyTo({ center: [+d[0].lon, +d[0].lat], zoom: 17 });
