@@ -505,7 +505,7 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 <section class="step" data-step="1" hidden>
   <p class="kicker caps">1 · Identity</p>
   <h1>What should this station be called?</h1>
-  <p class="sub">MLAT servers identify it by this name.</p>
+  <p class="sub">We will use this name to identify your station.</p>
   <input type="text" id="name" placeholder="my-station" autocomplete="off">
   <div class="actions">
     <button class="cta" data-next>CONTINUE</button>
