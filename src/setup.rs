@@ -417,6 +417,12 @@ const SETUP_PAGE: &str = r##"<!doctype html>
   ::placeholder{color:rgba(34,31,26,.35)}
   .row{display:flex;gap:20px}
   .row>*{flex:1}
+  .mapwrap{position:relative}
+  .mapbtn{position:absolute;top:10px;right:10px;z-index:5;width:36px;height:36px;border-radius:6px;
+    border:1px solid var(--line);background:var(--paper);color:var(--ink);cursor:pointer;
+    display:flex;align-items:center;justify-content:center;padding:0;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+  .mapbtn svg{width:20px;height:20px}
+  .mapbtn:hover{border-color:var(--ink)}
   #map{height:min(340px,44vh);border:1px solid var(--line);border-radius:6px;
     margin:14px 0;background:var(--card)}
   .pin{width:14px;height:14px;background:var(--red);border:2px solid var(--paper);
@@ -541,10 +547,15 @@ const SETUP_PAGE: &str = r##"<!doctype html>
   <p class="sub">Zoom in and press on its location. It has to be precise so try
   your best to pinpoint its exact location.</p>
   <div class="row" style="align-items:center;margin-bottom:12px">
-    <input type="text" id="addr" placeholder="Search for an address, then press Enter" autocomplete="off">
-    <button id="locate" class="ghost" style="flex:none">Center on my location</button>
+    <input type="text" id="addr" placeholder="Type the exact address" autocomplete="off">
+    <button id="pinaddr" class="ghost" style="flex:none">Place the pin</button>
   </div>
-  <div id="map"></div>
+  <div class="mapwrap">
+    <div id="map"></div>
+    <button id="locate" class="mapbtn" title="Center on my location" aria-label="Center on my location">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+    </button>
+  </div>
   <input type="hidden" id="lat">
   <input type="hidden" id="lon">
   <div class="actions">
@@ -700,7 +711,8 @@ document.addEventListener('keydown', e => {
 });
 
 // Address search through Nominatim (OpenStreetMap): one request per
-// search, the map flies there, the pin is still placed by hand.
+// search; the pin lands on the result and can still be dragged.
+document.getElementById('pinaddr').onclick = searchAddress;
 function searchAddress() {
   const box = document.getElementById('addr');
   const q = box.value.trim();
@@ -710,6 +722,7 @@ function searchAddress() {
       + encodeURIComponent(navigator.language || 'en') + '&q=' + encodeURIComponent(q))
     .then(r => r.json()).then(d => {
       if (!d.length) return complain('No place found for that. Try the street and the city.');
+      setPos(+d[0].lat, +d[0].lon, false);
       if (map) map.flyTo({ center: [+d[0].lon, +d[0].lat], zoom: 17 });
     }).catch(() => complain('The address lookup did not answer. Find it on the map.'))
     .finally(() => { box.disabled = false; });
