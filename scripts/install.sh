@@ -180,7 +180,7 @@ print_add_lines() {
     key="$1"
     echo
     echo "Station key: $key"
-    echo "Keep it; it marks the feeds as yours."
+    echo "Keep it; it is used to identify your station."
     echo
     case "$DETECTED_KIND" in
         readsb)
@@ -532,7 +532,7 @@ if [ "${NEEDS_SETUP:-0}" = "1" ]; then
     echo "Done. Finish setup in a browser on this network:"
     echo "  http://$(hostname).local:8654/  (or this machine's IP, port 8654)"
     echo "The same address becomes the station's status page afterwards."
-    [ -n "$KEY" ] && echo "Station key: $KEY — keep it; it marks the feeds as yours."
+    [ -n "$KEY" ] && echo "Station key: $KEY. Keep it; it is used to identify your station."
 else
     echo "Done. The station's page: http://$(hostname).local:8654/"
     echo "(or this machine's IP, port 8654)"

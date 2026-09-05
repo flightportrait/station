@@ -223,21 +223,20 @@ fn apply(body: &str, config_path: &std::path::Path, setup: &Setup) -> anyhow::Re
             .rx
             .as_deref()
             .map(|p| init::readsb_program(p, &json_dir, sub.lat, sub.lon));
+        // readsb: where the installer put it (beside stationd), else the
+        // usual places; with no radio and no readsb found, the standard
+        // path is written so the status page names what is missing.
         let readsb_path = if !sub.input.readsb_path.trim().is_empty() {
             Some(sub.input.readsb_path.trim().to_string())
-        } else if radio_prog.is_none() {
-            Some("/usr/local/bin/readsb".to_string())
         } else {
-            ["/usr/local/bin/readsb", "/usr/bin/readsb"]
-                .iter()
-                .find(|p| std::path::Path::new(p).exists())
-                .map(|p| p.to_string())
+            init::find_program("readsb")
                 .or_else(|| {
-                    std::env::var_os("HOME").map(|h| {
-                        std::path::Path::new(&h).join("station/readsb").display().to_string()
-                    })
+                    ["/usr/local/bin/readsb", "/usr/bin/readsb"]
+                        .iter()
+                        .find(|p| std::path::Path::new(p).exists())
+                        .map(|p| p.to_string())
                 })
-                .filter(|p| std::path::Path::new(p).exists())
+                .or_else(|| radio_prog.is_none().then(|| "/usr/local/bin/readsb".to_string()))
         };
         let readsb_prog = readsb_path.map(|p| init::readsb_program(&p, &json_dir, sub.lat, sub.lon));
         (
@@ -266,7 +265,7 @@ fn apply(body: &str, config_path: &std::path::Path, setup: &Setup) -> anyhow::Re
         &station_uuid,
     );
     notes.push(format!(
-        "Station key {station_uuid}. Keep it; it marks these feeds as yours."
+        "Station key {station_uuid}. Keep it; it's used to identify your station."
     ));
     if feeds.is_empty() {
         let mut problems =
@@ -452,7 +451,8 @@ const SETUP_PAGE: &str = r##"<!doctype html>
     flex:none;display:inline-flex;align-items:center;justify-content:center;
     font-size:13px;color:var(--paper);background:transparent;margin-left:auto}
   .opt.on .check{background:var(--ink);border-color:var(--ink)}
-  .opt.on .check::after{content:"\2713"}
+  .opt.on .check{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f5f1e6' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:center;background-size:13px}
   .opt:not(.on){opacity:.6}
   .opt:not(.on):hover{opacity:.85}
   .check + .ext{margin-left:0}
@@ -1036,7 +1036,7 @@ function buildSummary() {
     const k = document.createElement('div');
     const c = document.createElement('code'); c.textContent = stationKey;
     const h = document.createElement('div'); h.className = 'finehint';
-    h.textContent = 'Keep it; it marks these feeds as yours.';
+    h.textContent = 'Keep it; it\'s used to identify your station.';
     k.append(c, h);
     row('Station key', k);
   }
@@ -1063,7 +1063,7 @@ document.getElementById('go').onclick = async () => {
   } catch (e) { return showProblems(['The station did not answer. Is it still running?'], []); }
   if (!d.ok) return showProblems(d.problems || [], d.notes || []);
   fill('notes7', d.notes || []);
-  show(7, false);
+  show(6, false);
   const poll = setInterval(async () => {
     try {
       const s = await (await fetch('/status.json')).json();

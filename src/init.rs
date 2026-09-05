@@ -163,6 +163,25 @@ pub fn find_rx(explicit: Option<&std::path::Path>) -> Option<String> {
     })
 }
 
+/// A program the installer placed beside stationd (or in ~/station): the
+/// executable's path when it exists there.
+pub fn find_program(name: &str) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(name));
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(std::path::Path::new(&home).join("station").join(name));
+    }
+    candidates.into_iter().find_map(|p| {
+        let m = std::fs::metadata(&p).ok()?;
+        (m.is_file() && m.permissions().mode() & 0o111 != 0).then(|| p.display().to_string())
+    })
+}
+
 /// A station key as typed by a person: 36 characters, 8-4-4-4-12 hex.
 /// Returns it lowercased, or a sentence saying what is wrong.
 pub fn parse_station_key(s: &str) -> Result<String, String> {
@@ -782,7 +801,7 @@ fn print_summary(a: &Answers) {
         &a.input_beast
     };
     println!("  frames from {input_desc}");
-    println!("  station key {} — keep it; it marks the feeds as yours", a.station_uuid);
+    println!("  station key {}. Keep it; it's used to identify your station", a.station_uuid);
     for f in &a.feeds {
         let mut what = Vec::new();
         if let Some(d) = &f.adsb {

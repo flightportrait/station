@@ -89,7 +89,8 @@ pub struct Programs {
 }
 
 fn default_mlatc() -> String {
-    "mlatc".into()
+    // The installer puts mlatc beside stationd, not on the PATH.
+    crate::init::find_program("mlatc").unwrap_or_else(|| "mlatc".into())
 }
 
 impl Default for Programs {
