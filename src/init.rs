@@ -26,8 +26,8 @@ pub const CATALOG: &[Aggregator] = &[
     Aggregator {
         name: "FlightPortrait",
         adsb: Some("feed.flightportrait.com:30004"),
-        mlat: None,
-        note: "ours — powers the art frames; MLAT when our solver goes public",
+        mlat: Some("feed.flightportrait.com:31090"),
+        note: "ours; powers the art frames, MLAT by our own server",
         gives: "your sky becomes daily posters on FlightPortrait frames",
         url: "https://flightportrait.com",
         key_hint: "arrives with a FlightPortrait frame; empty is fine without one",
