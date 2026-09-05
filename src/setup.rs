@@ -409,6 +409,7 @@ const SETUP_PAGE: &str = r##"<!doctype html>
   .kicker{color:var(--red);margin-bottom:14px}
   h1{font-size:34px;line-height:1.15;font-weight:400;margin:0 0 12px}
   .sub{color:var(--quiet);max-width:52ch;margin-bottom:26px}
+  .sub.wide{max-width:none}
   input[type=text],input[type=number]{font:inherit;font-size:19px;width:100%;
     padding:10px 2px;border:0;border-bottom:1.5px solid var(--line);
     background:transparent;color:var(--ink);border-radius:0}
@@ -441,6 +442,14 @@ const SETUP_PAGE: &str = r##"<!doctype html>
   .opt{display:block;border:1px solid var(--line);border-radius:6px;
     background:var(--card);padding:16px 18px;margin:10px 0;cursor:pointer}
   #feeds{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 12px}
+  .check{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--line);
+    flex:none;display:inline-flex;align-items:center;justify-content:center;
+    font-size:13px;color:var(--paper);background:transparent;margin-left:auto}
+  .opt.on .check{background:var(--ink);border-color:var(--ink)}
+  .opt.on .check::after{content:"\2713"}
+  .opt:not(.on){opacity:.6}
+  .opt:not(.on):hover{opacity:.85}
+  .check + .ext{margin-left:0}
   #feeds .opt{margin:0}
   @media (max-width:600px){#feeds{grid-template-columns:1fr}}
   .tile img{width:28px;height:28px;border-radius:6px;display:block}
@@ -455,7 +464,7 @@ const SETUP_PAGE: &str = r##"<!doctype html>
     align-items:center;justify-content:center;color:#F5F1E6;
     font-family:'Helvetica Neue',Arial,sans-serif;font-size:14px}
   .tile svg{width:28px;height:28px;display:block}
-  .ext{margin-left:auto;color:var(--red);font-size:14px;text-decoration:none;flex:none}
+  .ext{margin-left:auto;color:var(--red);font-size:14px;text-decoration:none;flex:none;margin-right:6px}
   .ext:hover{text-decoration:underline}
   .keylink{font-size:14px;margin-top:6px;display:inline-block}
   .keyfield{margin-top:8px;display:none}
@@ -519,7 +528,10 @@ const SETUP_PAGE: &str = r##"<!doctype html>
   <h1>Where is the antenna?</h1>
   <p class="sub">Zoom in and press on its location. It has to be precise so try
   your best to pinpoint its exact location.</p>
-  <p><button id="locate" class="ghost">Center on my location</button></p>
+  <div class="row" style="align-items:center;margin-bottom:12px">
+    <input type="text" id="addr" placeholder="Search for an address, then press Enter" autocomplete="off">
+    <button id="locate" class="ghost" style="flex:none">Center on my location</button>
+  </div>
   <div id="map"></div>
   <input type="hidden" id="lat">
   <input type="hidden" id="lon">
@@ -554,12 +566,12 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 <section class="step" data-step="4" hidden>
   <p class="kicker caps">4 · Feeding</p>
   <h1>Who should hear about your sky?</h1>
-  <p class="sub">FlightPortrait is one of many aggregators ensuring ADS-B data
+  <p class="sub wide">FlightPortrait is one of many aggregators ensuring ADS-B data
   remains public and widely accessible. You can share your antenna feed with
   multiple aggregators at the same time. We selected a few we trust below.</p>
   <div id="feeds"></div>
   <div class="opt" id="customcard">
-    <span class="t"><span class="tile" style="background:var(--line);color:var(--ink)">+</span><b>Somewhere else</b></span>
+    <span class="t"><span class="tile" style="background:var(--line);color:var(--ink)">+</span><b>Somewhere else</b><span class="check"></span></span>
     <span class="gives">An MLAT server, a raw-data destination, or both.</span>
     <div id="customfields" hidden>
       <input type="text" id="cname" placeholder="name" autocomplete="off">
@@ -670,8 +682,26 @@ document.querySelectorAll('[data-back]').forEach(b =>
 document.addEventListener('keydown', e => {
   if (e.key !== 'Enter' || active >= LAST_Q) return;
   if (e.target.closest && e.target.closest('#map')) return;
-  e.preventDefault(); next();
+  e.preventDefault();
+  if (e.target.id === 'addr') return searchAddress();
+  next();
 });
+
+// Address search through Nominatim (OpenStreetMap): one request per
+// search, the map flies there, the pin is still placed by hand.
+function searchAddress() {
+  const box = document.getElementById('addr');
+  const q = box.value.trim();
+  if (!q) return;
+  box.disabled = true;
+  fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q),
+    { headers: { 'Accept-Language': navigator.language || 'en' } })
+    .then(r => r.json()).then(d => {
+      if (!d.length) return complain('No place found for that. Try the street and the city.');
+      if (map) map.flyTo({ center: [+d[0].lon, +d[0].lat], zoom: 17 });
+    }).catch(() => complain('The address lookup did not answer. Find it on the map.'))
+    .finally(() => { box.disabled = false; });
+}
 
 // ---- receiver -------------------------------------------------------
 // The dongle is found by itself; the only question is the footnote on the
@@ -917,7 +947,7 @@ fetch('/setup/info').then(r => r.json()).then(d => {
     const what = a.adsb && a.mlat ? 'ADS-B + MLAT' : (a.adsb ? 'ADS-B' : 'MLAT');
     return '<label class="opt on"><input type="checkbox" data-i="'+i+'" checked>'
       + '<span class="t">' + tileFor(a, i) + '<b>'+a.name+'</b>'
-      + '<a class="ext" href="'+a.url+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">site ↗</a></span>'
+      + '<a class="ext" href="'+a.url+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">site ↗</a><span class="check"></span></span>'
       + '<span class="gives">'+what+'. '+a.gives.charAt(0).toUpperCase()+a.gives.slice(1)+'.</span>'
       + '</label>';
   }).join('');
@@ -938,7 +968,7 @@ fetch('/setup/info').then(r => r.json()).then(d => {
       const where = [f.adsb, f.mlat].filter(Boolean).join(', ');
       return '<label class="opt on"><input type="checkbox" data-x="'+x+'" checked>'
         + '<span class="t"><span class="tile" style="background:var(--line);color:var(--ink)">'
-        + f.name.charAt(0).toUpperCase() + '</span><b>'+f.name+'</b></span>'
+        + f.name.charAt(0).toUpperCase() + '</span><b>'+f.name+'</b><span class="check"></span></span>'
         + '<span class="gives">'+what+'. Kept from your previous receiver: '+where+'.</span>'
         + '</label>';
     }).join(''));
