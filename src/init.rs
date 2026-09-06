@@ -40,7 +40,7 @@ pub const CATALOG: &[Aggregator] = &[
         gives: "a public map and a free API of what you feed",
         url: "https://adsb.lol",
         key_hint:
-            "optional — no account exists; generate one and keep it, their site treats it as yours",
+            "optional; generate one and keep it, their site treats it as yours",
     },
     Aggregator {
         name: "adsb.fi",
@@ -50,7 +50,7 @@ pub const CATALOG: &[Aggregator] = &[
         gives: "a public map and a free API of what you feed",
         url: "https://adsb.fi",
         key_hint:
-            "optional — no account exists; generate one and keep it to mark the station as yours",
+            "optional; generate one and keep it to mark the station as yours",
     },
     Aggregator {
         name: "adsb.win",
@@ -362,7 +362,7 @@ fn gather_fancy(
     let th = ColorfulTheme::default();
     let station_uuid = starting_key(key, imported);
 
-    println!("Station setup — a few questions, then a working station.\n");
+    println!("Station setup: a few questions, then a working station.\n");
     if let Some(i) = imported {
         let names: Vec<&str> = i.feeds.iter().map(|f| f.name.as_str()).collect();
         println!("Starting from the feeds your previous receiver had: {}.\n", names.join(", "));
@@ -382,7 +382,7 @@ fn gather_fancy(
 
     println!();
     println!("The antenna's position. Right-click your house in Google Maps;");
-    println!("the first menu entry is the two numbers — paste them here as one.");
+    println!("the first menu entry is the two numbers; paste them here as one.");
     println!("MLAT places other people's aircraft with them, so closer is better.");
     let pos: String = Input::with_theme(&th)
         .with_prompt("Position (lat, lon)")
@@ -404,7 +404,7 @@ fn gather_fancy(
     println!();
     let sdr = detect_rtlsdr();
     let sdr_label = if sdr {
-        "This machine's SDR dongle — one is plugged in right now"
+        "This machine's SDR dongle, plugged in right now"
     } else {
         "This machine's SDR dongle (stationd will run readsb)"
     };
@@ -456,7 +456,7 @@ fn gather_fancy(
     };
 
     println!();
-    println!("Aggregators. Feeding is non-exclusive — space toggles, Enter confirms.");
+    println!("Aggregators. Space toggles, Enter confirms.");
     let items: Vec<String> = CATALOG
         .iter()
         .map(|a| {
@@ -465,7 +465,7 @@ fn gather_fancy(
                 (Some(_), None) => "ADS-B",
                 _ => "MLAT",
             };
-            format!("{}  ({what}) — {}", a.name, a.note)
+            format!("{}  ({what}), {}", a.name, a.note)
         })
         .collect();
     let defaults: Vec<bool> = CATALOG
@@ -637,7 +637,7 @@ fn gather_plain(
     );
 
     println!("\nThe antenna's position. Right-click your house in Google Maps;");
-    println!("the first menu entry is the two numbers — paste them here as one.");
+    println!("the first menu entry is the two numbers; paste them here as one.");
     println!("MLAT places other people's aircraft with them, so closer is better.");
     let (lat, lon) = loop {
         let v = ask("Position (\"lat, lon\")", "");
@@ -658,7 +658,7 @@ fn gather_plain(
     println!("\nWhere do the radio signals come from?");
     println!("  1. A readsb already running on another machine (host:port of its data stream)");
     if sdr {
-        println!("  2. This machine's SDR dongle — one is plugged in right now");
+        println!("  2. This machine's SDR dongle, plugged in right now");
     } else {
         println!("  2. This machine's SDR dongle (stationd will run readsb)");
     }
@@ -700,7 +700,7 @@ fn gather_plain(
             (Some(_), None) => "ADS-B",
             _ => "MLAT",
         };
-        println!("  {}. {} ({what}) — {}", i + 1, a.name, a.note);
+        println!("  {}. {} ({what}), {}", i + 1, a.name, a.note);
     }
     println!("  {}. somewhere else", CATALOG.len() + 1);
     let mut feeds: Vec<FeedChoice> = imported.map(|i| i.choices()).unwrap_or_default();

@@ -524,8 +524,7 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 <section class="step center" data-step="0">
   <svg class="bigmark" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#221f1a"/><path d="M10.5 36Q9 35 10.74 34.54L27.13 30.23Q28 30 28.42 29.21L35.58 15.79Q36 15 36.88 15.18L40.12 15.82Q41 16 40.75 16.87L37.25 29.13Q37 30 37.87 30.25L51 34C54 35 55 37 54.3 38.4Q54 39 53 38.94L36.9 38.05Q36 38 35.46 38.72L27.54 49.28Q27 50 26.13 49.78L23.87 49.22Q23 49 23.35 48.17L27.65 37.83Q28 37 27.11 37.14L15.89 38.86Q15 39 14.25 38.5Z" fill="#f5f1e6" transform="rotate(29 32 32)"/></svg>
   <h1>Set up your station.</h1>
-  <p class="sub">Follow this interactive setup to start watching the aircraft above you.
-  This should only take 2 minutes.</p>
+  <p class="sub">Five steps, about two minutes.</p>
   <div class="actions"><button class="cta" data-next>BEGIN</button></div>
 </section>
 
@@ -544,8 +543,7 @@ const SETUP_PAGE: &str = r##"<!doctype html>
 <section class="step" data-step="2" hidden>
   <p class="kicker caps">2 · Position</p>
   <h1>Where is the antenna?</h1>
-  <p class="sub">Zoom in and press on its location. It has to be precise so try
-  your best to pinpoint its exact location.</p>
+  <p class="sub">Type the address or press its spot on the map. The closer, the better.</p>
   <div class="row" style="align-items:center;margin-bottom:12px">
     <input type="text" id="addr" placeholder="Type the exact address" autocomplete="off">
     <button id="pinaddr" class="ghost" style="flex:none">Place the pin</button>
@@ -669,18 +667,18 @@ function mode() { return document.getElementById('beast').value.trim() ? 'remote
 
 function validate(n) {
   if (n === 1 && !document.getElementById('name').value.trim())
-    return 'The station needs a name, anything you like.';
+    return 'Give the station a name.';
   if (n === 2) {
     const la = parseFloat(document.getElementById('lat').value);
     const lo = parseFloat(document.getElementById('lon').value);
-    if (isNaN(la) || isNaN(lo)) return 'Click the antenna\'s spot on the map first.';
+    if (isNaN(la) || isNaN(lo)) return 'Press the antenna\'s spot on the map first.';
   }
   if (n === 3 && isNaN(parseFloat(document.getElementById('ground').value))) {
     elevState = 'manual'; renderGround();
-    return 'The ground elevation is still unknown, type it in.';
+    return 'Type in the ground elevation.';
   }
   if (n === 4 && !pickedFeeds().length)
-    return 'Pick at least one, or the station tells no one.';
+    return 'Pick at least one.';
   return null;
 }
 
@@ -1026,13 +1024,13 @@ function buildSummary() {
     const k = document.createElement('div');
     const c = document.createElement('code'); c.textContent = stationKey;
     const h = document.createElement('div'); h.className = 'finehint';
-    h.textContent = 'Keep it; it\'s used to identify your station.';
+    h.textContent = 'Keep it. It identifies your station.';
     k.append(c, h);
     row('Station key', k);
   }
   box.append(dl);
   showProblems(mode() === 'sdr' && !sdrFound
-    ? ['No RTL-SDR dongle found on this machine. Plug it in; this page notices by itself.'] : [], []);
+    ? ['No RTL-SDR dongle found. Plug it in and this page will notice.'] : [], []);
 }
 
 document.getElementById('go').onclick = async () => {
