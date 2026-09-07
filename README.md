@@ -1,50 +1,48 @@
 # stationd
 
-stationd is the Station feeder runtime. It reads one configuration
-file, refuses to start until the file is clean (every problem is a
-sentence that says what to fix), supervises the receiver stack, and
-serves one status document with one page reading it.
-
-The stack it supervises: the radio ([rx](https://github.com/flightportrait/rx),
-with readsb as its fallback when a dongle is local), and
-[mlatc](https://github.com/flightportrait/mlatc), the multiplexing MLAT
-client: one process, one Beast decode, every configured MLAT server. A
-child that dies is restarted with backoff; its output flows through the
-stationd journal with a name prefix. SIGTERM and Ctrl-C stop everything,
-children included.
-
-The status page at `/` shows the station's numbers (aircraft now,
-message rate, today against yesterday, farthest heard) and its feeds'
-MLAT sync state. A healthy page carries no sentences; diagnostics
-appear only when a rule fires, each one a plain sentence with an
-action. The MLAT rules triangulate: one server rejecting the station
-is that server's problem, every server rejecting it means the
-station's own position or clock is wrong.
-
-Setup happens in a browser. Started with no configuration file,
-stationd serves a wizard on the LAN (the terminal prints the URL and a
-QR code): name, antenna position on a map (ground elevation fills in
-from the position), frame source, and an aggregator list:
-FlightPortrait, adsb.lol, adsb.fi, adsb.win, or anywhere else. On
-submit the same validation sentences run, station.toml is written, and
-the process continues into normal operation; the same URL becomes the
-status page. `stationd --init` is the terminal equivalent for SSH.
+The Station feeder runtime. One binary that runs an ADS-B receiver
+for you: it supervises the radio and the MLAT client, feeds the
+networks you choose, and shows how the station is doing on one page.
+Made for the [FlightPortrait network](https://flightportrait.com/network),
+non-exclusive by design: adsb.lol, adsb.fi, adsb.win and any other
+aggregator are one line each.
 
 ## Install
 
-On a fresh Debian-family machine (Raspberry Pi OS Lite included):
+A Raspberry Pi (3B or newer) or any Debian-family machine, an RTL-SDR
+dongle, an antenna:
 
 ```sh
 curl -fsSL https://flightportrait.com/station/install.sh | sh
 ```
 
-The installer says what it does before each step, downloads the three
-release binaries into `~/station`, installs the service, and opens the
-setup wizard. On a machine that already runs a receiver it stops first
-and offers `--add` (leave it, print the one line that makes it feed
-FlightPortrait) or `--replace` (import its feeds and keys, then take
-over). `--print` shows the manual path. [docs/PI.md](docs/PI.md) has
-the details and the hand-built path.
+The installer says what it does before each step. It downloads three
+release binaries into `~/station`, installs a systemd service, and
+prints the address of the setup page. Open it on your phone: name the
+station, put the antenna on the map, tick the networks to feed. Done.
+
+Already running readsb, PiAware, FR24 or ultrafeeder? The installer
+notices and asks: `--add` leaves it alone and prints the one line that
+makes it feed FlightPortrait; `--replace` imports its feeds and keys
+and takes over. `--print` shows the manual path.
+[docs/PI.md](docs/PI.md) has the details.
+
+## What it does
+
+- Supervises [rx](https://github.com/flightportrait/rx), the Station
+  radio, with readsb as fallback, and
+  [mlatc](https://github.com/flightportrait/mlatc), one MLAT client
+  for every server. A child that dies is restarted with backoff; all
+  output lands in one journal.
+- Validates `station.toml` before starting. Every problem is a
+  sentence that says what to fix; a half-configured station never
+  runs.
+- Serves `/status.json` and a status page: aircraft now, message
+  rate, today against yesterday, farthest heard, MLAT sync per feed.
+  A healthy page has no prose. When something is wrong, one plain
+  sentence says what and what to do about it.
+- With no configuration file, serves the setup wizard instead;
+  `stationd --init` does the same in a terminal over SSH.
 
 ## Run from source
 
@@ -54,28 +52,19 @@ cargo build --release
 curl http://127.0.0.1:8654/status.json
 ```
 
-`station.example.toml` documents every field. `--check` validates the
-configuration and exits.
+`station.example.toml` documents every field; `--check` validates and
+exits.
 
 ## What leaves the machine
 
-Frames go to the aggregators you tick, each with the station key you
-chose to give it. The setup page, in your browser, asks three public
-services on your behalf and stores nothing there: OpenFreemap for map
-tiles, Nominatim (OpenStreetMap) when you type an address, and
-Open-Meteo for the ground elevation at the pin; the coarse first map
-position comes from ipwho.is. The status page is served on the LAN
-only, without authentication, like a router's first-run page.
-
-## Design rules
-
-- Silent degradation is a bug. A configuration problem stops the start
-  and produces a sentence a person can act on.
-- The daemon publishes machine-readable state; anything that draws
-  lives elsewhere.
-- rx and readsb stay untouched; stationd only runs them.
+Frames go to the networks you tick, each with the station key you
+gave it. The setup page, in your browser, uses OpenFreemap for tiles,
+Nominatim for address search, Open-Meteo for ground elevation, and
+ipwho.is for a first rough map position; nothing is stored there. The
+status page is LAN-only and unauthenticated, like a router's first-run
+page.
 
 ## License
 
-AGPL-3.0-or-later ([LICENSE-AGPL](LICENSE-AGPL)). MapLibre GL (BSD-3)
-is vendored in `src/vendor/` with its licence; see [NOTICE](NOTICE).
+AGPL-3.0-or-later ([LICENSE-AGPL](LICENSE-AGPL)). MapLibre GL is
+vendored under BSD-3; see [NOTICE](NOTICE).
