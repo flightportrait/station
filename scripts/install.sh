@@ -192,14 +192,14 @@ print_add_lines() {
             echo "  --net-connector $FP_ADSB,uuid=$key"
             ;;
         dump1090-fa|piaware)
-            echo "dump1090-fa (6.0 or newer takes --net-connector): add this to"
-            echo "NET_OPTIONS in /etc/default/dump1090-fa, then"
-            echo "  sudo systemctl restart dump1090-fa"
+            echo "dump1090-fa only listens; it cannot connect out. A small readsb"
+            echo "beside it carries the line (PiAware keeps feeding FlightAware):"
             echo
-            echo "  --net-connector $FP_ADSB,uuid=$key"
+            echo "  readsb --net-only --net-connector localhost:30005,beast_in \\"
+            echo "    --net-connector $FP_ADSB,uuid=$key"
             echo
-            echo "Older dump1090-fa has no connectors; a small readsb beside it"
-            echo "(--net-only, reading its port 30005) can carry the line instead."
+            echo "As a service: wiedehopf's readsb install script, then those two"
+            echo "connectors and --net-only in NET_OPTIONS of /etc/default/readsb."
             ;;
         docker)
             echo "ultrafeeder: add this entry to ULTRAFEEDER_CONFIG (entries are"
