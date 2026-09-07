@@ -447,7 +447,7 @@ fi
 # binary beside this script wins only when the script runs from a
 # checkout of the repository (a build of your own).
 fetch() {
-    curl -fsSL -o "$HOME_DIR/$1.new" "$2" && chmod +x "$HOME_DIR/$1.new" || { rm -f "$HOME_DIR/$1.new"; return 1; }
+    curl -fsSL --retry 3 --connect-timeout 20 -o "$HOME_DIR/$1.new" "$2" && chmod +x "$HOME_DIR/$1.new" || { rm -f "$HOME_DIR/$1.new"; return 1; }
     if [ -x "$HOME_DIR/$1" ] && cmp -s "$HOME_DIR/$1" "$HOME_DIR/$1.new"; then
         rm -f "$HOME_DIR/$1.new"; echo "$1: current release already installed"; return 0
     fi
