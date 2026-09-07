@@ -24,4 +24,6 @@ jobs:
           cp target/${{ matrix.target }}/release/stationd out/stationd-${{ matrix.target }}
       - uses: softprops/action-gh-release@v2
         with:
-          files: out/* scripts/install.sh
+          files: |
+            out/*
+            scripts/install.sh
