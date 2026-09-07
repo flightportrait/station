@@ -1,0 +1,11 @@
+stationd
+Copyright 2026 YODE PTE LTD
+
+Licensed under the GNU Affero General Public License v3.0 or later
+(LICENSE-AGPL).
+
+This distribution vendors MapLibre GL JS (src/vendor/maplibre-gl.js,
+maplibre-gl.css), Copyright (c) MapLibre contributors, under the
+BSD-3-Clause licence reproduced in src/vendor/LICENSE.txt. The map
+tiles come from OpenFreemap (OpenStreetMap data, ODbL). "Station" and
+"FlightPortrait" are trademarks of YODE PTE LTD.

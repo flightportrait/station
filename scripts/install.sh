@@ -25,6 +25,7 @@
 HOME_DIR="$HOME/station"
 MLATC_RELEASE="https://github.com/flightportrait/mlatc/releases/latest/download"
 RX_RELEASE="https://github.com/flightportrait/rx/releases/latest/download"
+STATIOND_RELEASE="https://github.com/flightportrait/station/releases/latest/download"
 FP_ADSB="feed.flightportrait.com,30004,beast_reduce_plus_out"
 
 # --- helpers (sourced by scripts/tests with STATION_INSTALL_LIB=1) -------
@@ -243,7 +244,7 @@ The Station by hand, on a Debian-family machine ($arch):
 3. Binaries into $HOME_DIR (mkdir -p $HOME_DIR/state; chmod +x each):
      $RX_RELEASE/rx-$arch-unknown-linux-gnu        -> $HOME_DIR/rx
      $MLATC_RELEASE/mlatc-$arch-unknown-linux-musl -> $HOME_DIR/mlatc
-     stationd from this repository's release, or built with cargo         -> $HOME_DIR/stationd
+     $STATIOND_RELEASE/stationd-$arch-unknown-linux-musl -> $HOME_DIR/stationd
 4. Service, /etc/systemd/system/stationd.service:
      [Unit]
      Description=Station feeder runtime
@@ -440,8 +441,8 @@ else
 fi
 
 # --- binaries ----------------------------------------------------------
-# rx (the Station radio) and mlatc come from their public releases;
-# stationd arrives beside this script until its repo publishes releases.
+# All three come from their public releases; a binary placed beside this
+# script wins, for a build of your own.
 for bin in stationd mlatc rx; do
     if [ -x "$HOME_DIR/$bin" ]; then
         echo "$bin: already installed"
@@ -462,9 +463,9 @@ for bin in stationd mlatc rx; do
             BUILD_READSB=1
         fi
     else
-        echo "$bin: missing. Copy it next to this script (a static"
-        echo "  $ARCH build; see docs/PI.md for the Docker one-liner)."
-        exit 1
+        echo "stationd: downloading the release binary"
+        curl -fsSL -o "$HOME_DIR/stationd" "$STATIOND_RELEASE/stationd-$ARCH-unknown-linux-musl"
+        chmod +x "$HOME_DIR/stationd"
     fi
 done
 

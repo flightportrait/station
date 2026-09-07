@@ -11,7 +11,9 @@ Raspberry Pi OS Lite; the manual version of what it does:
 2. Binaries into `~/station`: `rx` from
    github.com/flightportrait/rx/releases (`rx-aarch64-unknown-linux-gnu`),
    `mlatc` from github.com/flightportrait/mlatc/releases, and `stationd`
-   cross-built on any machine with Docker:
+   from github.com/flightportrait/station/releases
+   (`stationd-aarch64-unknown-linux-musl`), or cross-built on any machine
+   with Docker:
    `docker run --rm -v $PWD:/src -w /src rust:slim sh -c
    "rustup target add aarch64-unknown-linux-musl &&
    RUSTFLAGS='-C linker=rust-lld' cargo build --release
