@@ -216,11 +216,10 @@ print_add_lines() {
             echo "  adsb,$FP_ADSB,uuid=$key"
             ;;
         adsbim)
-            echo "adsb.im image: aggregators are chosen in the image's own web page."
-            echo "FlightPortrait is being added to its list; until it appears there,"
-            echo "the image's \"other aggregator\" field takes this line:"
+            echo "adsb.im image: FlightPortrait is not on its aggregator list yet."
+            echo "Until it is: Expert page, \"Ultrafeeder extra args\", paste and apply:"
             echo
-            echo "  adsb,$FP_ADSB,uuid=$key"
+            echo "  adsb,$FP_ADSB,uuid=$key;mlat,feed.flightportrait.com,31090,uuid=$key"
             ;;
         fr24feed)
             echo "FR24 feeder: it does not forward to other networks. Run readsb or"
