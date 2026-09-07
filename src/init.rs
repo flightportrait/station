@@ -234,7 +234,8 @@ impl Imported {
     }
 
     pub fn parse(text: &str) -> anyhow::Result<Imported> {
-        let mut imp: Imported = toml::from_str(text).map_err(|e| anyhow::anyhow!("does not parse: {e}"))?;
+        let mut imp: Imported =
+            toml::from_str(text).map_err(|e| anyhow::anyhow!("does not parse: {e}"))?;
         if let Some(k) = imp.station_key.take() {
             imp.station_key = Some(parse_station_key(&k).map_err(|e| anyhow::anyhow!("{e}"))?);
         }
@@ -249,9 +250,21 @@ impl Imported {
             .iter()
             .map(|f| FeedChoice {
                 name: f.name.trim().to_string(),
-                adsb: f.adsb.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-                mlat: f.mlat.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-                uuid: f.uuid.as_ref().map(|s| s.trim().to_string()).unwrap_or_default(),
+                adsb: f
+                    .adsb
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+                mlat: f
+                    .mlat
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+                uuid: f
+                    .uuid
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default(),
             })
             .collect()
     }
@@ -260,7 +273,9 @@ impl Imported {
     /// the same host on either endpoint.
     pub fn matching(&self, a: &Aggregator) -> Option<FeedChoice> {
         fn host(s: &str) -> String {
-            s.rsplit_once(':').map(|(h, _)| h.to_string()).unwrap_or_else(|| s.to_string())
+            s.rsplit_once(':')
+                .map(|(h, _)| h.to_string())
+                .unwrap_or_else(|| s.to_string())
         }
         self.choices().into_iter().find(|f| {
             f.name.eq_ignore_ascii_case(a.name)
@@ -365,7 +380,10 @@ fn gather_fancy(
     println!("Station setup — a few questions, then a working station.\n");
     if let Some(i) = imported {
         let names: Vec<&str> = i.feeds.iter().map(|f| f.name.as_str()).collect();
-        println!("Starting from the feeds your previous receiver had: {}.\n", names.join(", "));
+        println!(
+            "Starting from the feeds your previous receiver had: {}.\n",
+            names.join(", ")
+        );
     }
 
     let name: String = Input::with_theme(&th)
@@ -428,7 +446,11 @@ fn gather_fancy(
             } else {
                 "Path to the readsb binary"
             })
-            .default(if rx.is_some() { String::new() } else { "/usr/local/bin/readsb".into() })
+            .default(if rx.is_some() {
+                String::new()
+            } else {
+                "/usr/local/bin/readsb".into()
+            })
             .allow_empty(rx.is_some())
             .interact_text()?;
         let readsb_prog = Some(readsb.trim())
@@ -801,7 +823,10 @@ fn print_summary(a: &Answers) {
         &a.input_beast
     };
     println!("  frames from {input_desc}");
-    println!("  station key {}. Keep it; it's used to identify your station", a.station_uuid);
+    println!(
+        "  station key {}. Keep it; it's used to identify your station",
+        a.station_uuid
+    );
     for f in &a.feeds {
         let mut what = Vec::new();
         if let Some(d) = &f.adsb {
@@ -838,7 +863,9 @@ pub fn render_toml(a: &Answers) -> String {
     }
     if a.radio_prog.is_some() || a.readsb_prog.is_some() {
         // MLAT results come back into the local radio's Beast input.
-        out.push_str(&format!("\n[results]\nbeast_connect = \"{RESULTS_LOCAL}\"\n"));
+        out.push_str(&format!(
+            "\n[results]\nbeast_connect = \"{RESULTS_LOCAL}\"\n"
+        ));
     }
     if let Some(l) = &a.listen {
         out.push_str(&format!("\n[status]\nlisten = \"{l}\"\n"));
@@ -907,6 +934,28 @@ pub fn detect_rtlsdr() -> bool {
     false
 }
 
+/// Random UUID-shaped identifier from the system generator.
+pub fn pseudo_uuid() -> String {
+    let mut b = [0u8; 16];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut b))
+        .is_err()
+    {
+        return "00000000-0000-4000-8000-000000000000".into();
+    }
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: Vec<String> = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        h[0..4].join(""),
+        h[4..6].join(""),
+        h[6..8].join(""),
+        h[8..10].join(""),
+        h[10..16].join("")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -951,11 +1000,21 @@ mod tests {
             listen: None,
         };
         let out = render_toml(&a);
-        assert!(out.contains("radio = \"/bin/sh --device-type rtlsdr"), "{out}");
+        assert!(
+            out.contains("radio = \"/bin/sh --device-type rtlsdr"),
+            "{out}"
+        );
         assert!(out.contains("readsb = \"/bin/sh"), "{out}");
         assert!(out.contains("--net-bi-port 30004"), "{out}");
-        assert!(out.contains("[results]\nbeast_connect = \"127.0.0.1:30004\""), "{out}");
-        assert!(check_rendered(&out).unwrap().is_empty(), "{:?}", check_rendered(&out));
+        assert!(
+            out.contains("[results]\nbeast_connect = \"127.0.0.1:30004\""),
+            "{out}"
+        );
+        assert!(
+            check_rendered(&out).unwrap().is_empty(),
+            "{:?}",
+            check_rendered(&out)
+        );
     }
 
     #[test]
@@ -975,7 +1034,10 @@ mod tests {
             listen: None,
         };
         let out = render_toml(&a);
-        assert!(!out.contains("[results]") && !out.contains("[programs]"), "{out}");
+        assert!(
+            !out.contains("[results]") && !out.contains("[programs]"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -984,7 +1046,12 @@ mod tests {
             parse_station_key(" D5FA1765-183B-4227-998A-9E260D7A2F40 ").unwrap(),
             "d5fa1765-183b-4227-998a-9e260d7a2f40"
         );
-        for bad in ["", "d5fa1765", "d5fa1765-183b-4227-998a-9e260d7a2f4g", "d5fa1765183b4227998a9e260d7a2f40"] {
+        for bad in [
+            "",
+            "d5fa1765",
+            "d5fa1765-183b-4227-998a-9e260d7a2f4g",
+            "d5fa1765183b4227998a9e260d7a2f40",
+        ] {
             assert!(parse_station_key(bad).is_err(), "{bad}");
         }
     }
@@ -1010,7 +1077,10 @@ name = "nothing"
 "#,
         )
         .unwrap();
-        assert_eq!(imp.station_key.as_deref(), Some("d5fa1765-183b-4227-998a-9e260d7a2f40"));
+        assert_eq!(
+            imp.station_key.as_deref(),
+            Some("d5fa1765-183b-4227-998a-9e260d7a2f40")
+        );
         assert_eq!(imp.feeds.len(), 2, "a feed with no endpoint is dropped");
         let lol = CATALOG.iter().find(|a| a.name == "adsb.lol").unwrap();
         let m = imp.matching(lol).expect("adsb.lol matched by host");
@@ -1027,26 +1097,4 @@ name = "nothing"
         assert!(Imported::parse("station_key = \"nope\"\n").is_err());
         assert!(Imported::parse("").unwrap().feeds.is_empty());
     }
-}
-
-/// Random UUID-shaped identifier from the system generator.
-pub fn pseudo_uuid() -> String {
-    let mut b = [0u8; 16];
-    if std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut b))
-        .is_err()
-    {
-        return "00000000-0000-4000-8000-000000000000".into();
-    }
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    let h: Vec<String> = b.iter().map(|x| format!("{x:02x}")).collect();
-    format!(
-        "{}-{}-{}-{}-{}",
-        h[0..4].join(""),
-        h[4..6].join(""),
-        h[6..8].join(""),
-        h[8..10].join(""),
-        h[10..16].join("")
-    )
 }

@@ -358,12 +358,18 @@ mod tests {
     #[test]
     fn a_quarter_hour_of_silence_falls_back() {
         assert_eq!(fallback_reason(0, Some(899.0)), None);
-        assert_eq!(fallback_reason(0, Some(900.0)), Some(FallbackReason::Silence));
+        assert_eq!(
+            fallback_reason(0, Some(900.0)),
+            Some(FallbackReason::Silence)
+        );
     }
 
     #[test]
     fn crashes_win_over_silence_in_the_reason() {
-        assert_eq!(fallback_reason(3, Some(1000.0)), Some(FallbackReason::Crashes));
+        assert_eq!(
+            fallback_reason(3, Some(1000.0)),
+            Some(FallbackReason::Crashes)
+        );
     }
 
     #[test]

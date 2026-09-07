@@ -42,7 +42,8 @@ pub struct FeedSpec {
 fn adsb_connected(addr: &str) -> Option<bool> {
     use std::collections::HashMap;
     use std::net::{SocketAddr, ToSocketAddrs};
-    static CACHE: Mutex<Option<HashMap<String, (Instant, Vec<SocketAddr>)>>> = Mutex::new(None);
+    type Resolved = HashMap<String, (Instant, Vec<SocketAddr>)>;
+    static CACHE: Mutex<Option<Resolved>> = Mutex::new(None);
     let mut c = CACHE.lock().unwrap();
     let cache = c.get_or_insert_with(HashMap::new);
     let fresh = cache
@@ -52,7 +53,10 @@ fn adsb_connected(addr: &str) -> Option<bool> {
     let targets = match fresh {
         Some(v) => v,
         None => {
-            let v: Vec<SocketAddr> = addr.to_socket_addrs().map(|i| i.collect()).unwrap_or_default();
+            let v: Vec<SocketAddr> = addr
+                .to_socket_addrs()
+                .map(|i| i.collect())
+                .unwrap_or_default();
             cache.insert(addr.to_string(), (Instant::now(), v.clone()));
             v
         }
@@ -69,21 +73,30 @@ fn established_remotes() -> Vec<std::net::SocketAddr> {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
     let mut out = Vec::new();
     for (path, v6) in [("/proc/net/tcp", false), ("/proc/net/tcp6", true)] {
-        let Ok(text) = std::fs::read_to_string(path) else { continue };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
         for line in text.lines().skip(1) {
             let f: Vec<&str> = line.split_whitespace().collect();
             if f.len() < 4 || f[3] != "01" {
                 continue;
             }
-            let Some((h, p)) = f[2].split_once(':') else { continue };
-            let Ok(port) = u16::from_str_radix(p, 16) else { continue };
+            let Some((h, p)) = f[2].split_once(':') else {
+                continue;
+            };
+            let Ok(port) = u16::from_str_radix(p, 16) else {
+                continue;
+            };
             let ip = if v6 {
                 if h.len() != 32 {
                     continue;
                 }
                 let mut b = [0u8; 16];
                 for (i, chunk) in h.as_bytes().chunks(8).enumerate() {
-                    let Ok(w) = u32::from_str_radix(std::str::from_utf8(chunk).unwrap_or("x"), 16) else { continue };
+                    let Ok(w) = u32::from_str_radix(std::str::from_utf8(chunk).unwrap_or("x"), 16)
+                    else {
+                        continue;
+                    };
                     b[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
                 }
                 let ip6 = Ipv6Addr::from(b);
@@ -92,7 +105,9 @@ fn established_remotes() -> Vec<std::net::SocketAddr> {
                     None => IpAddr::V6(ip6),
                 }
             } else {
-                let Ok(w) = u32::from_str_radix(h, 16) else { continue };
+                let Ok(w) = u32::from_str_radix(h, 16) else {
+                    continue;
+                };
                 IpAddr::V4(Ipv4Addr::from(w.to_le_bytes()))
             };
             out.push(SocketAddr::new(ip, port));
@@ -147,7 +162,10 @@ impl StatusServer {
             .iter()
             .map(|spec| {
                 let name = &spec.name;
-                let path = spec.mlat_stats_file.as_ref().map(|f| self.stats_dir.join(f));
+                let path = spec
+                    .mlat_stats_file
+                    .as_ref()
+                    .map(|f| self.stats_dir.join(f));
                 let age = path
                     .as_ref()
                     .and_then(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())

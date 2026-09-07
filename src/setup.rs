@@ -208,7 +208,11 @@ struct SubmissionFeed {
 
 /// One submission: build the same Answers the terminal wizard builds,
 /// validate with the same sentences, write on success.
-fn apply(body: &str, config_path: &std::path::Path, setup: &Setup) -> anyhow::Result<(String, bool)> {
+fn apply(
+    body: &str,
+    config_path: &std::path::Path,
+    setup: &Setup,
+) -> anyhow::Result<(String, bool)> {
     let sub: Submission = serde_json::from_str(body)?;
     let station_uuid = if sub.station_key.trim().len() == 36 {
         sub.station_key.trim().to_string()
@@ -236,9 +240,14 @@ fn apply(body: &str, config_path: &std::path::Path, setup: &Setup) -> anyhow::Re
                         .find(|p| std::path::Path::new(p).exists())
                         .map(|p| p.to_string())
                 })
-                .or_else(|| radio_prog.is_none().then(|| "/usr/local/bin/readsb".to_string()))
+                .or_else(|| {
+                    radio_prog
+                        .is_none()
+                        .then(|| "/usr/local/bin/readsb".to_string())
+                })
         };
-        let readsb_prog = readsb_path.map(|p| init::readsb_program(&p, &json_dir, sub.lat, sub.lon));
+        let readsb_prog =
+            readsb_path.map(|p| init::readsb_program(&p, &json_dir, sub.lat, sub.lon));
         (
             "127.0.0.1:30005".to_string(),
             Some(json_dir.clone()),
@@ -759,9 +768,9 @@ function setPos(lat, lon, zoomTo) {
 }
 
 // ---- paper skin -------------------------------------------------------
-// Mirrors paperify() on the network map (site/network/index.html): the
-// brand's basemap reskin: paper ground, warm sea, quiet ink line-work.
-// When it changes there, change it here in the same commit.
+// Mirrors paperify() on the network map (flightportrait/network,
+// web/index.html): the basemap reskin, paper ground, warm sea, quiet ink
+// line-work. When it changes there, change it here in the same commit.
 const BASEMAP = 'https://tiles.openfreemap.org/styles/liberty';
 const INKRGB = [34, 31, 26];
 const colorCtx = document.createElement('canvas').getContext('2d');

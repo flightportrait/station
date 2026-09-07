@@ -1,9 +1,9 @@
-//! stationd — the Station feeder runtime, v0.
+//! stationd: the Station feeder runtime.
 //!
 //! Reads one validated configuration file, supervises the receiver stack
-//! (mlatc always; readsb when configured), and serves /status.json.
-//! Refuses to start with a broken configuration and says why in
-//! sentences. See station.example.toml.
+//! (the radio, rx with readsb as fallback; mlatc always), and serves
+//! /status.json with the status page. Refuses to start with a broken
+//! configuration and says why in sentences. See station.example.toml.
 
 mod config;
 mod diagnose;
@@ -50,29 +50,46 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let key_given = cli
-        .station_key
-        .clone()
-        .or_else(|| std::env::var("STATION_KEY").ok().filter(|k| !k.trim().is_empty()));
+    let key_given = cli.station_key.clone().or_else(|| {
+        std::env::var("STATION_KEY")
+            .ok()
+            .filter(|k| !k.trim().is_empty())
+    });
     let key = match key_given {
-        Some(k) => Some(init::parse_station_key(&k).map_err(|e| anyhow::anyhow!("--station-key: {e}"))?),
+        Some(k) => {
+            Some(init::parse_station_key(&k).map_err(|e| anyhow::anyhow!("--station-key: {e}"))?)
+        }
         None => None,
     };
     let imported = match &cli.import {
         Some(p) if p.exists() => Some(init::Imported::read(p)?),
         Some(p) => {
-            eprintln!("stationd: --import {}: no such file; starting from nothing", p.display());
+            eprintln!(
+                "stationd: --import {}: no such file; starting from nothing",
+                p.display()
+            );
             None
         }
         None => None,
     };
     if cli.init {
-        return init::run(&cli.config, cli.radio.as_deref(), key.as_deref(), imported.as_ref());
+        return init::run(
+            &cli.config,
+            cli.radio.as_deref(),
+            key.as_deref(),
+            imported.as_ref(),
+        );
     }
     // No configuration file at all is not an error: it means first run.
     // The browser wizard writes one, and this process carries on with it.
     if !cli.check && !cli.config.exists() {
-        setup::serve(&cli.config, cli.radio.as_deref(), key.as_deref(), imported.as_ref()).await?;
+        setup::serve(
+            &cli.config,
+            cli.radio.as_deref(),
+            key.as_deref(),
+            imported.as_ref(),
+        )
+        .await?;
     }
     let text = std::fs::read_to_string(&cli.config)
         .with_context(|| format!("cannot read {}", cli.config.display()))?;
@@ -110,7 +127,9 @@ async fn main() -> Result<()> {
     // The radio slot: rx when configured, readsb as its fallback (or alone).
     let spec_for = |name: &str, line: &str| -> Result<supervise::ChildSpec> {
         let mut parts = line.split_whitespace().map(String::from);
-        let cmd = parts.next().with_context(|| format!("programs.{name} is empty"))?;
+        let cmd = parts
+            .next()
+            .with_context(|| format!("programs.{name} is empty"))?;
         let mut args: Vec<String> = parts.collect();
         args.extend(cfg.readsb_feed_args());
         Ok(supervise::ChildSpec {
@@ -120,29 +139,37 @@ async fn main() -> Result<()> {
         })
     };
     let radio_health = supervise::RadioHealth::new();
-    let radio_state: Option<supervise::RadioShared> = match (&cfg.programs.radio, &cfg.programs.readsb) {
-        (Some(radio), fallback) => {
-            let state = Arc::new(Mutex::new(supervise::RadioState {
-                running: "radio",
-                fallback: None,
-                fell_back_unix: None,
-            }));
-            supervise::spawn_radio(
-                spec_for("radio", radio)?,
-                fallback.as_deref().map(|r| spec_for("readsb", r)).transpose()?,
-                statuses.clone(),
-                shutdown_rx.clone(),
-                radio_health.clone(),
-                state.clone(),
-            );
-            Some(state)
-        }
-        (None, Some(readsb)) => {
-            supervise::spawn(spec_for("readsb", readsb)?, statuses.clone(), shutdown_rx.clone());
-            None
-        }
-        (None, None) => None,
-    };
+    let radio_state: Option<supervise::RadioShared> =
+        match (&cfg.programs.radio, &cfg.programs.readsb) {
+            (Some(radio), fallback) => {
+                let state = Arc::new(Mutex::new(supervise::RadioState {
+                    running: "radio",
+                    fallback: None,
+                    fell_back_unix: None,
+                }));
+                supervise::spawn_radio(
+                    spec_for("radio", radio)?,
+                    fallback
+                        .as_deref()
+                        .map(|r| spec_for("readsb", r))
+                        .transpose()?,
+                    statuses.clone(),
+                    shutdown_rx.clone(),
+                    radio_health.clone(),
+                    state.clone(),
+                );
+                Some(state)
+            }
+            (None, Some(readsb)) => {
+                supervise::spawn(
+                    spec_for("readsb", readsb)?,
+                    statuses.clone(),
+                    shutdown_rx.clone(),
+                );
+                None
+            }
+            (None, None) => None,
+        };
 
     let metrics_path = cli.state_dir.join("metrics.json");
     let shared = Arc::new(status::Shared {

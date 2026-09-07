@@ -1,6 +1,6 @@
 //! The diagnostics rules: machine conditions in, sentences out.
 //!
-//! A healthy station produces an empty list — the page then shows data
+//! A healthy station produces an empty list; the page then shows data
 //! and no prose. Every rule pairs one condition with one sentence and
 //! one action a person can take. The MLAT rules use the per-server
 //! stats push for triangulation: one server complaining is that
@@ -186,17 +186,17 @@ mod tests {
                     stats_age_s: Some(10.0),
                     bad_sync: false,
                     clock_resets: 0,
-                adsb_connected: None,
+                    adsb_connected: None,
                     has_mlat: true,
-            },
+                },
                 FeedView {
                     name: "b".into(),
                     stats_age_s: Some(12.0),
                     bad_sync: false,
                     clock_resets: 0,
-                adsb_connected: None,
+                    adsb_connected: None,
                     has_mlat: true,
-            },
+                },
             ],
             failing_children: vec![],
             radio_fallback: None,
