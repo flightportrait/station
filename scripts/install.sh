@@ -20,7 +20,8 @@
 #   sh install.sh --station-key <uuid>   # a key you kept, not a new one
 #                                        # (STATION_KEY= does the same)
 #
-# Idempotent: everything already present is detected and kept.
+# Idempotent: a second run refreshes the binaries to the current release
+# and restarts the service only when one changed; configuration is kept.
 
 HOME_DIR="$HOME/station"
 MLATC_RELEASE="https://github.com/flightportrait/mlatc/releases/latest/download"
@@ -441,31 +442,35 @@ else
 fi
 
 # --- binaries ----------------------------------------------------------
-# All three come from their public releases; a binary placed beside this
-# script wins, for a build of your own.
+# All three come from their public releases. A second run refreshes them
+# to the current release and keeps the previous copy as <name>.prev. A
+# binary beside this script wins only when the script runs from a
+# checkout of the repository (a build of your own).
+fetch() {
+    curl -fsSL -o "$HOME_DIR/$1.new" "$2" && chmod +x "$HOME_DIR/$1.new" || { rm -f "$HOME_DIR/$1.new"; return 1; }
+    if [ -x "$HOME_DIR/$1" ] && cmp -s "$HOME_DIR/$1" "$HOME_DIR/$1.new"; then
+        rm -f "$HOME_DIR/$1.new"; echo "$1: current release already installed"; return 0
+    fi
+    [ -x "$HOME_DIR/$1" ] && mv "$HOME_DIR/$1" "$HOME_DIR/$1.prev" && CHANGED=1
+    mv "$HOME_DIR/$1.new" "$HOME_DIR/$1"
+    echo "$1: installed from the release"
+}
+CHANGED=0
+CHECKOUT=""
+[ -f "$(dirname "$0")/../Cargo.toml" ] && CHECKOUT="$(dirname "$0")"
 for bin in stationd mlatc rx; do
-    if [ -x "$HOME_DIR/$bin" ]; then
-        echo "$bin: already installed"
-    elif [ -x "$(dirname "$0")/$bin" ]; then
-        cp "$(dirname "$0")/$bin" "$HOME_DIR/$bin"
-        echo "$bin: installed from alongside the script"
+    if [ -n "$CHECKOUT" ] && [ -x "$CHECKOUT/$bin" ]; then
+        cp "$CHECKOUT/$bin" "$HOME_DIR/$bin"; CHANGED=1
+        echo "$bin: installed from the checkout"
     elif [ "$bin" = "mlatc" ]; then
-        echo "mlatc: downloading the release binary"
-        curl -fsSL -o "$HOME_DIR/mlatc" "$MLATC_RELEASE/mlatc-$ARCH-unknown-linux-musl"
-        chmod +x "$HOME_DIR/mlatc"
+        fetch mlatc "$MLATC_RELEASE/mlatc-$ARCH-unknown-linux-musl"
     elif [ "$bin" = "rx" ]; then
-        echo "rx: downloading the release binary"
-        if curl -fsSL -o "$HOME_DIR/rx" "$RX_RELEASE/rx-$ARCH-unknown-linux-gnu"; then
-            chmod +x "$HOME_DIR/rx"
-        else
-            rm -f "$HOME_DIR/rx"
+        if ! fetch rx "$RX_RELEASE/rx-$ARCH-unknown-linux-gnu" && [ ! -x "$HOME_DIR/rx" ]; then
             echo "rx: no release for $ARCH yet; readsb will be the radio"
             BUILD_READSB=1
         fi
     else
-        echo "stationd: downloading the release binary"
-        curl -fsSL -o "$HOME_DIR/stationd" "$STATIOND_RELEASE/stationd-$ARCH-unknown-linux-musl"
-        chmod +x "$HOME_DIR/stationd"
+        fetch stationd "$STATIOND_RELEASE/stationd-$ARCH-unknown-linux-musl"
     fi
 done
 
@@ -532,8 +537,16 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 sudo mv /tmp/stationd.service /etc/systemd/system/stationd.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now stationd
+if systemctl is-active --quiet stationd; then
+    sudo systemctl daemon-reload
+    if [ "$CHANGED" = 1 ]; then
+        echo "service: restarting stationd with the new binaries"
+        sudo systemctl restart stationd
+    fi
+else
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now stationd
+fi
 
 sleep 2
 sudo systemctl --no-pager --lines 0 status stationd | head -3
