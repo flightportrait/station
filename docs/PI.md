@@ -1,9 +1,11 @@
 # Running on a Raspberry Pi
 
 Proven on a Pi 3B (aarch64), first done 2026-09-02; the Station radio
-(rx) has run in readsb's place on it since 2026-09-05. Until the
-flashable image exists (S4), the path is `scripts/install.sh` on a fresh
-Raspberry Pi OS Lite; the manual version of what it does:
+(rx) has run in readsb's place on it since 2026-09-05. Until a
+flashable image exists, the path is `scripts/install.sh` on a fresh
+Raspberry Pi OS Lite (64-bit: the releases are aarch64 and x86_64, and
+the installer stops on a 32-bit system); the manual version of what it
+does:
 
 1. `sudo apt-get install librtlsdr0` (rx links it), and blacklist the
    kernel's TV driver so the dongle is free at boot:

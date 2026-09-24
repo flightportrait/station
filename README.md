@@ -9,8 +9,9 @@ aggregator are one line each.
 
 ## Install
 
-A Raspberry Pi (3B or newer) or any Debian-family machine, an RTL-SDR
-dongle, an antenna:
+A Raspberry Pi (3B or newer, or a Zero 2 W) on Raspberry Pi OS Lite
+**64-bit**, or any 64-bit Debian-family machine (aarch64 or x86_64),
+with an RTL-SDR dongle and a 1090 MHz antenna:
 
 ```sh
 curl -fsSL https://flightportrait.com/station/install.sh | sh
