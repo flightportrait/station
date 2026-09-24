@@ -31,7 +31,7 @@ does:
    brings MLAT positions back into the radio. Without an SDR, the radio
    relays another receiver:
    `readsb --net-only --net-connector <source>,30005,beast_in
-   --net-bo-port 30005 --write-json <state>/readsb --write-json-every 1`
+   --net-bo-port 30005 --write-json /run/station/readsb --write-json-every 1`
    with `input.beast = "127.0.0.1:30005"` and `readsb_json` pointing at
    the same directory.
 5. `stationd --check`, then install deploy/stationd.service and enable
@@ -63,3 +63,32 @@ offers two doors, as a question on a terminal, as flags otherwise:
 
 A Pi 3B runs the full stack in about 30 MB of RAM; rx takes a fifth of
 one core with collision recovery on.
+
+## The card
+
+SD cards die from small writes, not age: a card can only erase in large
+blocks, so a file rewritten every second costs many times its size in
+wear, and a power cut during a write can corrupt the card's own map.
+The rule the Station keeps is that nothing rewritten all day touches
+the card while it runs:
+
+- The radio's `aircraft.json` (every second) and mlatc's stats files
+  (every 15 s) live in `/run/station`, which is RAM: the service unit's
+  `RuntimeDirectory=station` creates it, the wizard writes that path,
+  and stationd refuses to start when the path cannot be made. It warns
+  on the page and in its journal when the configuration still points
+  the radio at the card.
+- `metrics.json`, the 48 h of history behind the page, is saved once
+  an hour and at shutdown, to the disk before its name (fsync, then
+  rename), so a power cut costs at most an hour of history and never a
+  broken file.
+- The page's footer shows what the card took since stationd started,
+  read from the kernel's counter for the root disk. A station in good
+  health shows well under 1 MB an hour; above 20 MB an hour a sentence
+  names the rate so the writer (graphs, a heat map, a chatty log) can
+  be found with `sudo iotop -ao`.
+
+Raspberry Pi OS keeps the journal in RAM unless `/var/log/journal`
+exists; leave it that way. High-endurance cards (the "Endurance" lines)
+take ten times the writes of an ordinary one for a few dollars more and
+are the right choice for a station that must not be touched again.

@@ -26,6 +26,11 @@ pub struct Diagnostic {
 /// Everything the rules look at, assembled by the status task.
 pub struct View {
     pub readsb_configured: bool,
+    /// Whether the radio's aircraft.json directory is in RAM; None when
+    /// there is no radio JSON or the mount table could not be read.
+    pub json_in_ram: Option<bool>,
+    /// The root disk's write counter since stationd started.
+    pub card: Option<crate::disk::Reading>,
     /// Age of aircraft.json's own clock, seconds.
     pub readsb_age_s: Option<f64>,
     pub aircraft_now: u32,
@@ -166,16 +171,63 @@ pub fn diagnose(v: &View) -> Vec<Diagnostic> {
                 .into(),
         });
     }
+
+    // The card: a station in good health writes nothing to it while
+    // running. The radio's JSON on the card is the known killer; anything
+    // else writing at that rate gets named by its rate.
+    if v.json_in_ram == Some(false) {
+        out.push(Diagnostic {
+            id: "json-on-card",
+            severity: Severity::Warning,
+            sentence: "The radio writes aircraft.json to the card every second; \
+                       that is what wears SD cards out."
+                .into(),
+            action: "In station.toml, point readsb_json and the radio's \
+                     --write-json at /run/station/readsb (the installer's \
+                     service creates it), then restart stationd."
+                .into(),
+        });
+    } else if let Some(c) = v.card {
+        if c.since_s >= 3600.0 && c.bytes_per_hour > CARD_BUDGET_PER_HOUR {
+            out.push(Diagnostic {
+                id: "card-writes",
+                severity: Severity::Warning,
+                sentence: format!(
+                    "Something writes {:.0} MB an hour to the card; a station in \
+                     good health writes under one.",
+                    c.bytes_per_hour / 1e6
+                ),
+                action: "Find the writer with `sudo iotop -ao` or `sudo fatrace`; \
+                         graphs, logging and heat maps are the usual ones."
+                    .into(),
+            });
+        }
+    }
     out
 }
+
+/// Bytes an hour the card may take before a sentence appears: room for
+/// the hourly metrics save, the journal and the OS's own housekeeping,
+/// and an order of magnitude under what a JSON writer costs.
+const CARD_BUDGET_PER_HOUR: f64 = 20e6;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn ids(d: &[Diagnostic]) -> Vec<&'static str> {
+        d.iter().map(|x| x.id).collect()
+    }
+
     fn healthy() -> View {
         View {
             readsb_configured: true,
+            json_in_ram: Some(true),
+            card: Some(crate::disk::Reading {
+                written_bytes: 400_000,
+                since_s: 7200.0,
+                bytes_per_hour: 200_000.0,
+            }),
             readsb_age_s: Some(2.0),
             aircraft_now: 12,
             rate_now: Some(500.0),
@@ -268,5 +320,39 @@ mod tests {
         let mut v = healthy();
         v.failing_children = vec![("mlatc".into(), 7)];
         assert!(diagnose(&v).iter().any(|d| d.id == "child-failing"));
+    }
+
+    #[test]
+    fn the_radio_json_on_the_card_is_named_once() {
+        let mut v = healthy();
+        v.json_in_ram = Some(false);
+        let d = diagnose(&v);
+        assert_eq!(ids(&d), vec!["json-on-card"]);
+    }
+
+    #[test]
+    fn heavy_card_writes_are_named_after_an_hour_with_their_rate() {
+        let mut v = healthy();
+        v.card = Some(crate::disk::Reading {
+            written_bytes: 60_000_000,
+            since_s: 1800.0,
+            bytes_per_hour: 120e6,
+        });
+        assert!(
+            diagnose(&v).is_empty(),
+            "half an hour is too early to judge"
+        );
+        v.card.as_mut().unwrap().since_s = 3600.0;
+        let d = diagnose(&v);
+        assert_eq!(ids(&d), vec!["card-writes"]);
+        assert!(d[0].sentence.contains("120 MB an hour"));
+    }
+
+    #[test]
+    fn no_counter_no_sentence() {
+        let mut v = healthy();
+        v.card = None;
+        v.json_in_ram = None;
+        assert!(diagnose(&v).is_empty());
     }
 }

@@ -25,6 +25,10 @@ pub struct StatusServer {
     /// Every configured feed: name, ADS-B destination, MLAT stats file.
     pub feeds: Vec<FeedSpec>,
     pub readsb_configured: bool,
+    /// Whether the radio's aircraft.json directory is in RAM (None: unknown).
+    pub json_in_ram: Option<bool>,
+    /// The root disk's write counter, when there is one.
+    pub card: Option<crate::disk::Meter>,
     pub shared: Arc<Shared>,
     /// What runs in the radio slot, when stationd runs a radio with a fallback.
     pub radio: Option<crate::supervise::RadioShared>,
@@ -214,8 +218,11 @@ impl StatusServer {
         let m = self.shared.metrics.lock().unwrap();
         let feeds = self.feed_views();
         let radio = self.radio.as_ref().map(|r| r.lock().unwrap().clone());
+        let card = self.card.as_ref().and_then(|c| c.read());
         let view = View {
             readsb_configured: self.readsb_configured,
+            json_in_ram: self.json_in_ram,
+            card,
             readsb_age_s: readsb_age,
             aircraft_now,
             rate_now: m.recent_rate(10),
@@ -258,6 +265,13 @@ impl StatusServer {
                 "adsb_connected": f.adsb_connected,
             })).collect::<Vec<_>>(),
             "history_minutes": m.ring.len(),
+            "card": self.card.as_ref().map(|c| serde_json::json!({
+                "disk": c.disk,
+                "json_in_ram": self.json_in_ram,
+                "written_bytes": card.map(|r| r.written_bytes),
+                "since_s": card.map(|r| r.since_s),
+                "bytes_per_hour": card.map(|r| r.bytes_per_hour),
+            })),
             "diagnostics": diagnostics,
         })
         .to_string()
@@ -320,7 +334,12 @@ async function tick() {
   document.getElementById('diag').innerHTML = (d.diagnostics || []).map(x =>
     '<div class="'+x.severity+'"><div>'+x.sentence+'</div><div class="act">'+x.action+'</div></div>').join('');
   const up = Math.floor((d.now_unix - d.started_unix) / 60);
-  document.getElementById('foot').textContent = 'up ' + up + ' min · ' + d.history_minutes + ' min of history';
+  let foot = 'up ' + up + ' min · ' + d.history_minutes + ' min of history';
+  if (d.card && d.card.written_bytes != null) {
+    const mb = d.card.written_bytes / 1e6;
+    foot += ' · card: ' + (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB written since start';
+  }
+  document.getElementById('foot').textContent = foot;
 }
 tick(); setInterval(tick, 5000);
 </script>

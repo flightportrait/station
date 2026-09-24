@@ -529,6 +529,7 @@ Wants=network-online.target
 User=$USER
 WorkingDirectory=$HOME_DIR
 ExecStart=$HOME_DIR/stationd --config $HOME_DIR/station.toml --state-dir $HOME_DIR/state$IMPORT_ARG
+RuntimeDirectory=station
 Restart=always
 RestartSec=3
 

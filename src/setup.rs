@@ -220,7 +220,7 @@ fn apply(
         setup.station_key.clone()
     };
     let (input_beast, readsb_json, readsb_prog, radio_prog) = if sub.input.mode == "sdr" {
-        let json_dir = "state/readsb".to_string();
+        let json_dir = init::JSON_DIR.to_string();
         // The Station radio when installed; readsb beside it as the
         // fallback, or alone when there is no radio.
         let radio_prog = setup

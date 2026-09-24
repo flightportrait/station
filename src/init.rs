@@ -130,6 +130,10 @@ fn default_station_name() -> String {
 
 /// The radio command line for a local dongle. readsb and rx take the same
 /// flags, so one shape serves both; port 30004 takes MLAT results back in.
+/// Where the radio writes aircraft.json: in RAM, under the service's
+/// RuntimeDirectory. Every second on the card is what kills SD cards.
+pub const JSON_DIR: &str = "/run/station/readsb";
+
 pub fn readsb_program(readsb_path: &str, json_dir: &str, lat: f64, lon: f64) -> String {
     format!(
         "{readsb_path} --device-type rtlsdr --gain auto --quiet \
@@ -435,7 +439,7 @@ fn gather_fancy(
         .default(if sdr { 1 } else { 0 })
         .interact()?;
     let (input_beast, readsb_json, readsb_prog, radio_prog) = if input_choice == 1 {
-        let json_dir = "state/readsb".to_string();
+        let json_dir = JSON_DIR.to_string();
         let radio_prog = rx.map(|p| readsb_program(p, &json_dir, lat, lon));
         if let Some(p) = rx {
             println!("  The Station radio is installed at {p}; readsb stays as its fallback.");
@@ -687,7 +691,7 @@ fn gather_plain(
     let default_input = if sdr { "2" } else { "1" };
     let choice = ask("Input", default_input);
     let (input_beast, readsb_json, readsb_prog, radio_prog) = if choice.trim() == "2" {
-        let json_dir = "state/readsb".to_string();
+        let json_dir = JSON_DIR.to_string();
         let radio_prog = rx.map(|p| readsb_program(p, &json_dir, lat, lon));
         let readsb = if let Some(p) = rx {
             println!("  The Station radio is installed at {p}; readsb stays as its fallback.");
@@ -992,9 +996,9 @@ mod tests {
             lon: 103.8,
             alt: "65m".into(),
             input_beast: "127.0.0.1:30005".into(),
-            readsb_json: Some("state/readsb".into()),
-            readsb_prog: Some(readsb_program("/bin/sh", "state/readsb", 1.3, 103.8)),
-            radio_prog: Some(readsb_program("/bin/sh", "state/readsb", 1.3, 103.8)),
+            readsb_json: Some(JSON_DIR.into()),
+            readsb_prog: Some(readsb_program("/bin/sh", JSON_DIR, 1.3, 103.8)),
+            radio_prog: Some(readsb_program("/bin/sh", JSON_DIR, 1.3, 103.8)),
             station_uuid: "k-1".into(),
             feeds,
             listen: None,

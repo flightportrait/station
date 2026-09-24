@@ -99,12 +99,18 @@ impl Metrics {
             .unwrap_or_default()
     }
 
+    /// Atomic: the file is either the old version or the new one, and the
+    /// new one is on the disk before its name is, so a power cut during
+    /// the save cannot leave an empty metrics.json.
     pub fn save(&self, path: &Path) {
         let tmp = path.with_extension("tmp");
-        if let Ok(f) = std::fs::File::create(&tmp) {
-            if serde_json::to_writer(std::io::BufWriter::new(f), self).is_ok() {
-                let _ = std::fs::rename(&tmp, path);
-            }
+        let written = std::fs::File::create(&tmp).and_then(|f| {
+            let mut w = std::io::BufWriter::new(f);
+            serde_json::to_writer(&mut w, self)?;
+            w.into_inner().map_err(|e| e.into_error())?.sync_all()
+        });
+        if written.is_ok() {
+            let _ = std::fs::rename(&tmp, path);
         }
     }
 

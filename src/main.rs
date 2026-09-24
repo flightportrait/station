@@ -7,6 +7,7 @@
 
 mod config;
 mod diagnose;
+mod disk;
 mod init;
 mod model;
 mod setup;
@@ -23,9 +24,15 @@ struct Cli {
     /// Configuration file.
     #[arg(long, default_value = "station.toml")]
     config: std::path::PathBuf,
-    /// Directory for runtime state (MLAT stats files).
+    /// Directory for what survives a restart (metrics.json); written once
+    /// an hour, so a card can hold it.
     #[arg(long, default_value = "state")]
     state_dir: std::path::PathBuf,
+    /// Directory for what is rewritten all day (MLAT stats files). In RAM
+    /// by default: systemd's RuntimeDirectory, else /run/station, else
+    /// <state>/run on the card, with a warning.
+    #[arg(long)]
+    run_dir: Option<std::path::PathBuf>,
     /// Validate the configuration and exit.
     #[arg(long)]
     check: bool,
@@ -109,6 +116,47 @@ async fn main() -> Result<()> {
     }
     std::fs::create_dir_all(&cli.state_dir)
         .with_context(|| format!("cannot create {}", cli.state_dir.display()))?;
+    // The card rule: nothing rewritten all day lands on the card. The
+    // stats files go to the run directory; the radio's aircraft.json goes
+    // where the configuration says, which the wizard sets in RAM too.
+    let run_dir = match &cli.run_dir {
+        Some(d) => d.clone(),
+        None => {
+            let (d, in_ram) = disk::run_dir(&cli.state_dir);
+            if !in_ram {
+                eprintln!(
+                    "stationd: /run/station is not available; MLAT stats files go to {} \
+                     (on the card; run under systemd with RuntimeDirectory=station)",
+                    d.display()
+                );
+            }
+            d
+        }
+    };
+    std::fs::create_dir_all(&run_dir)
+        .with_context(|| format!("cannot create {}", run_dir.display()))?;
+    let json_in_ram = match &cfg.input.readsb_json {
+        Some(dir) => {
+            std::fs::create_dir_all(dir).with_context(|| {
+                format!(
+                    "cannot create {} for the radio's aircraft.json; under systemd, \
+                     RuntimeDirectory=station in the unit makes /run/station",
+                    dir.display()
+                )
+            })?;
+            let in_ram = disk::in_ram(dir);
+            if in_ram == Some(false) {
+                eprintln!(
+                    "stationd: the radio writes aircraft.json to {} every second, which is \
+                     on the card; point readsb_json and the radio's --write-json at \
+                     /run/station/readsb",
+                    dir.display()
+                );
+            }
+            in_ram
+        }
+        None => None,
+    };
 
     let statuses: supervise::StatusMap = Arc::new(Mutex::new(Default::default()));
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -118,7 +166,7 @@ async fn main() -> Result<()> {
             supervise::ChildSpec {
                 name: "mlatc".into(),
                 cmd: cfg.programs.mlatc.clone(),
-                args: cfg.mlatc_args(&cli.state_dir),
+                args: cfg.mlatc_args(&run_dir),
             },
             statuses.clone(),
             shutdown_rx.clone(),
@@ -177,7 +225,8 @@ async fn main() -> Result<()> {
         snapshot: Mutex::new(None),
     });
     // Sampler: read readsb's JSON every 15 s; fold a sample into the ring
-    // once a minute; persist every 5 minutes.
+    // once a minute; persist once an hour (and at shutdown): a power cut
+    // costs an hour of history, and the card takes one small write.
     if let Some(dir) = cfg.input.readsb_json.clone() {
         let shared = shared.clone();
         let (lat, lon) = (cfg.station.lat, cfg.station.lon);
@@ -211,7 +260,7 @@ async fn main() -> Result<()> {
                         let hexes = snap.hexes.clone();
                         m.tick(unix, &snap, hexes.into_iter());
                     }
-                    if unix.saturating_sub(last_save) >= 300 {
+                    if unix.saturating_sub(last_save) >= 3600 {
                         last_save = unix;
                         m.save(&mpath);
                     }
@@ -229,7 +278,7 @@ async fn main() -> Result<()> {
             .map(|d| d.as_secs())
             .unwrap_or(0),
         children: statuses,
-        stats_dir: cli.state_dir.clone(),
+        stats_dir: run_dir.clone(),
         feeds: cfg
             .feeds
             .iter()
@@ -240,6 +289,8 @@ async fn main() -> Result<()> {
             })
             .collect(),
         readsb_configured: cfg.input.readsb_json.is_some(),
+        json_in_ram,
+        card: disk::Meter::start(),
         shared: shared.clone(),
         radio: radio_state,
     };

@@ -9,6 +9,9 @@ Wants=network-online.target
 User=station
 WorkingDirectory=/home/station/station
 ExecStart=/home/station/station/stationd --config /home/station/station/station.toml --state-dir /home/station/station/state
+# /run/station, in RAM: the radio's aircraft.json and the MLAT stats files
+# are rewritten all day and must never touch the card.
+RuntimeDirectory=station
 Restart=always
 RestartSec=3
 
