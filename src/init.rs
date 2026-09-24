@@ -77,6 +77,8 @@ pub struct Answers {
     pub alt: String,
     pub input_beast: String,
     pub readsb_json: Option<String>,
+    /// The radio's JSON socket, when the Station radio is installed.
+    pub radio_json: Option<String>,
     /// readsb command line: the radio when `radio_prog` is None, else the fallback.
     pub readsb_prog: Option<String>,
     /// The Station radio (rx) command line, when rx is installed.
@@ -133,6 +135,20 @@ fn default_station_name() -> String {
 /// Where the radio writes aircraft.json: in RAM, under the service's
 /// RuntimeDirectory. Every second on the card is what kills SD cards.
 pub const JSON_DIR: &str = "/run/station/readsb";
+
+/// Where the Station radio serves aircraft.json (rx --json-listen): a
+/// socket on this machine, nothing on disk. readsb, the fallback, can
+/// only write files, so it keeps JSON_DIR.
+pub const RADIO_JSON: &str = "127.0.0.1:30006";
+
+/// The Station radio's command line: readsb's flags plus the JSON socket.
+pub fn radio_program(rx_path: &str, lat: f64, lon: f64) -> String {
+    format!(
+        "{rx_path} --device-type rtlsdr --gain auto --quiet \
+         --net --net-bo-port 30005 --net-bi-port 30004 --json-listen {RADIO_JSON} \
+         --lat {lat} --lon {lon}"
+    )
+}
 
 pub fn readsb_program(readsb_path: &str, json_dir: &str, lat: f64, lon: f64) -> String {
     format!(
@@ -438,9 +454,9 @@ fn gather_fancy(
         ])
         .default(if sdr { 1 } else { 0 })
         .interact()?;
-    let (input_beast, readsb_json, readsb_prog, radio_prog) = if input_choice == 1 {
+    let (input_beast, readsb_json, radio_json, readsb_prog, radio_prog) = if input_choice == 1 {
         let json_dir = JSON_DIR.to_string();
-        let radio_prog = rx.map(|p| readsb_program(p, &json_dir, lat, lon));
+        let radio_prog = rx.map(|p| radio_program(p, lat, lon));
         if let Some(p) = rx {
             println!("  The Station radio is installed at {p}; readsb stays as its fallback.");
         }
@@ -463,6 +479,7 @@ fn gather_fancy(
         (
             "127.0.0.1:30005".to_string(),
             Some(json_dir.clone()),
+            radio_prog.is_some().then(|| RADIO_JSON.to_string()),
             readsb_prog,
             radio_prog,
         )
@@ -478,7 +495,7 @@ fn gather_fancy(
                 }
             })
             .interact_text()?;
-        (src, None, None, None)
+        (src, None, None, None, None)
     };
 
     println!();
@@ -570,6 +587,7 @@ fn gather_fancy(
         alt,
         input_beast,
         readsb_json,
+        radio_json,
         readsb_prog,
         radio_prog,
         station_uuid,
@@ -690,9 +708,9 @@ fn gather_plain(
     }
     let default_input = if sdr { "2" } else { "1" };
     let choice = ask("Input", default_input);
-    let (input_beast, readsb_json, readsb_prog, radio_prog) = if choice.trim() == "2" {
+    let (input_beast, readsb_json, radio_json, readsb_prog, radio_prog) = if choice.trim() == "2" {
         let json_dir = JSON_DIR.to_string();
-        let radio_prog = rx.map(|p| readsb_program(p, &json_dir, lat, lon));
+        let radio_prog = rx.map(|p| radio_program(p, lat, lon));
         let readsb = if let Some(p) = rx {
             println!("  The Station radio is installed at {p}; readsb stays as its fallback.");
             ask("Path to the readsb binary (Enter = none, no fallback)", "")
@@ -705,6 +723,7 @@ fn gather_plain(
         (
             "127.0.0.1:30005".to_string(),
             Some(json_dir.clone()),
+            radio_prog.is_some().then(|| RADIO_JSON.to_string()),
             readsb_prog,
             radio_prog,
         )
@@ -716,7 +735,7 @@ fn gather_plain(
             }
             println!("  host:port, like 192.168.1.10:30005.");
         };
-        (src, None, None, None)
+        (src, None, None, None, None)
     };
 
     println!("\nAggregators. Feeding is non-exclusive; add as many as you like.");
@@ -800,6 +819,7 @@ fn gather_plain(
         alt,
         input_beast,
         readsb_json,
+        radio_json,
         readsb_prog,
         radio_prog,
         station_uuid,
@@ -852,6 +872,9 @@ pub fn render_toml(a: &Answers) -> String {
     ));
     if let Some(j) = &a.readsb_json {
         out.push_str(&format!("readsb_json = \"{j}\"\n"));
+    }
+    if let Some(j) = &a.radio_json {
+        out.push_str(&format!("radio_json = \"{j}\"\n"));
     }
     for f in &a.feeds {
         out.push_str(&format!("\n[[feed]]\nname = \"{}\"\n", f.name));
@@ -997,8 +1020,9 @@ mod tests {
             alt: "65m".into(),
             input_beast: "127.0.0.1:30005".into(),
             readsb_json: Some(JSON_DIR.into()),
+            radio_json: Some(RADIO_JSON.into()),
             readsb_prog: Some(readsb_program("/bin/sh", JSON_DIR, 1.3, 103.8)),
-            radio_prog: Some(readsb_program("/bin/sh", JSON_DIR, 1.3, 103.8)),
+            radio_prog: Some(radio_program("/bin/sh", 1.3, 103.8)),
             station_uuid: "k-1".into(),
             feeds,
             listen: None,
@@ -1031,6 +1055,7 @@ mod tests {
             alt: "65m".into(),
             input_beast: "10.0.0.2:30005".into(),
             readsb_json: None,
+            radio_json: None,
             readsb_prog: None,
             radio_prog: None,
             station_uuid: "k-1".into(),

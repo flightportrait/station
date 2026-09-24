@@ -72,8 +72,11 @@ wear, and a power cut during a write can corrupt the card's own map.
 The rule the Station keeps is that nothing rewritten all day touches
 the card while it runs:
 
-- The radio's `aircraft.json` (every second) and mlatc's stats files
-  (every 15 s) live in `/run/station`, which is RAM: the service unit's
+- The Station radio serves `aircraft.json` over a socket
+  (`--json-listen 127.0.0.1:30006`, `input.radio_json`): nothing is
+  written anywhere. readsb, the fallback, can only write files, so its
+  `aircraft.json` (every second) and mlatc's stats files (every 15 s)
+  live in `/run/station`, which is RAM: the service unit's
   `RuntimeDirectory=station` creates it, the wizard writes that path,
   and stationd refuses to start when the path cannot be made. It warns
   on the page and in its journal when the configuration still points

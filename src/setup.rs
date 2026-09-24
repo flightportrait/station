@@ -219,14 +219,15 @@ fn apply(
     } else {
         setup.station_key.clone()
     };
-    let (input_beast, readsb_json, readsb_prog, radio_prog) = if sub.input.mode == "sdr" {
+    let (input_beast, readsb_json, radio_json, readsb_prog, radio_prog) = if sub.input.mode == "sdr"
+    {
         let json_dir = init::JSON_DIR.to_string();
         // The Station radio when installed; readsb beside it as the
         // fallback, or alone when there is no radio.
         let radio_prog = setup
             .rx
             .as_deref()
-            .map(|p| init::readsb_program(p, &json_dir, sub.lat, sub.lon));
+            .map(|p| init::radio_program(p, sub.lat, sub.lon));
         // readsb: where the installer put it (beside stationd), else the
         // usual places; with no radio and no readsb found, the standard
         // path is written so the status page names what is missing.
@@ -251,11 +252,12 @@ fn apply(
         (
             "127.0.0.1:30005".to_string(),
             Some(json_dir.clone()),
+            radio_prog.is_some().then(|| init::RADIO_JSON.to_string()),
             readsb_prog,
             radio_prog,
         )
     } else {
-        (sub.input.beast.trim().to_string(), None, None, None)
+        (sub.input.beast.trim().to_string(), None, None, None, None)
     };
     let non_empty = |s: Option<String>| s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     let feeds = sub
@@ -292,6 +294,7 @@ fn apply(
         alt: format!("{}m", sub.alt_m),
         input_beast,
         readsb_json,
+        radio_json,
         readsb_prog,
         radio_prog,
         station_uuid,

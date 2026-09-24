@@ -36,6 +36,11 @@ pub struct Input {
     /// counts, range, history, and most diagnostics.
     #[serde(default)]
     pub readsb_json: Option<std::path::PathBuf>,
+    /// The Station radio's JSON address (rx --json-listen), host:port.
+    /// Read first when set; readsb_json is then only for the fallback.
+    /// Nothing touches the disk this way.
+    #[serde(default)]
+    pub radio_json: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -164,6 +169,14 @@ impl Config {
                  usually port 30005).",
                 self.input.beast
             ));
+        }
+        if let Some(j) = &self.input.radio_json {
+            if !j.contains(':') {
+                p.push(format!(
+                    "input.radio_json is \"{j}\": write host:port (the radio's \
+                     --json-listen address, usually 127.0.0.1:30006)."
+                ));
+            }
         }
         if self.feeds.is_empty() {
             p.push("no [[feed]] blocks: the station would receive and tell no one.".into());

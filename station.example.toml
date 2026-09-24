@@ -12,6 +12,12 @@ alt = "65m"
 [input]
 # Where Mode S frames come from: an existing readsb's Beast output.
 beast = "127.0.0.1:30005"
+# Where aircraft.json comes from, for the page's numbers: the Station
+# radio's socket (rx --json-listen; nothing on disk), and/or readsb's
+# directory (--write-json; keep it in RAM, /run/station/readsb, because a
+# file rewritten every second wears the card out).
+# radio_json = "127.0.0.1:30006"
+# readsb_json = "/run/station/readsb"
 
 # One block per aggregator. Non-exclusive: add as many as you like.
 # adsb = raw Beast destination (needs [programs].readsb, which carries it

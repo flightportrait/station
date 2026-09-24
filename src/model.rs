@@ -18,10 +18,51 @@ pub struct Snapshot {
     pub hexes: Vec<String>,
 }
 
-pub fn read_snapshot(dir: &Path, lat: f64, lon: f64) -> Option<Snapshot> {
-    let path = dir.join("aircraft.json");
-    let text = std::fs::read_to_string(&path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+/// Where aircraft.json comes from: the radio's socket (nothing on disk),
+/// or readsb's directory.
+pub enum Source {
+    Radio(String),
+    Dir(std::path::PathBuf),
+}
+
+/// One reading: the radio's socket when it answers, else the directory
+/// (readsb, or the radio still configured to write files).
+pub async fn read_snapshot(sources: &[Source], lat: f64, lon: f64) -> Option<Snapshot> {
+    for s in sources {
+        let text = match s {
+            Source::Radio(addr) => http_get(addr, "/aircraft.json").await,
+            Source::Dir(dir) => std::fs::read_to_string(dir.join("aircraft.json")).ok(),
+        };
+        if let Some(snap) = text.and_then(|t| parse_snapshot(&t, lat, lon)) {
+            return Some(snap);
+        }
+    }
+    None
+}
+
+/// A GET of one small document from a local HTTP/1.0 server, two seconds
+/// end to end; None on any failure.
+async fn http_get(addr: &str, path: &str) -> Option<String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let io = async {
+        let mut s = tokio::net::TcpStream::connect(addr).await.ok()?;
+        s.write_all(format!("GET {path} HTTP/1.0\r\nHost: {addr}\r\n\r\n").as_bytes())
+            .await
+            .ok()?;
+        let mut buf = Vec::new();
+        s.read_to_end(&mut buf).await.ok()?;
+        let text = String::from_utf8(buf).ok()?;
+        let (head, body) = text.split_once("\r\n\r\n")?;
+        head.starts_with("HTTP/1.0 200 ").then(|| body.to_string())
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), io)
+        .await
+        .ok()
+        .flatten()
+}
+
+pub fn parse_snapshot(text: &str, lat: f64, lon: f64) -> Option<Snapshot> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
     let now = v.get("now")?.as_f64()?;
     let wall = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -197,6 +238,49 @@ impl Metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DOC: &str = r#"{"now":1790000000.0,"messages":12,"aircraft":[{"hex":"76cd01","lat":1.5,"lon":103.9},{"hex":"76cd02"}]}"#;
+
+    #[test]
+    fn a_document_parses_into_the_numbers() {
+        let s = parse_snapshot(DOC, 1.3, 103.8).unwrap();
+        assert_eq!((s.aircraft, s.with_position, s.messages_total), (2, 1, 12));
+        assert_eq!(s.farthest.as_ref().unwrap().0, "76cd01");
+        assert_eq!(s.hexes, vec!["76cd01", "76cd02"]);
+    }
+
+    /// The radio's socket answers first; a dead socket falls through to
+    /// the directory, which is how the readsb fallback keeps the page fed.
+    #[tokio::test]
+    async fn the_radio_socket_is_read_before_the_directory() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut b = [0u8; 256];
+            let _ = s.read(&mut b).await;
+            let r = format!(
+                "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{DOC}",
+                DOC.len()
+            );
+            s.write_all(r.as_bytes()).await.unwrap();
+        });
+        let dir = std::env::temp_dir().join(format!("stationd-model-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("aircraft.json"),
+            r#"{"now":1790000000.0,"messages":1,"aircraft":[]}"#,
+        )
+        .unwrap();
+        let sources = vec![Source::Radio(addr), Source::Dir(dir.clone())];
+        let s = read_snapshot(&sources, 1.3, 103.8).await.unwrap();
+        assert_eq!(s.aircraft, 2, "the socket's document");
+        // The socket is gone (one accept); the directory answers.
+        let s = read_snapshot(&sources, 1.3, 103.8).await.unwrap();
+        assert_eq!(s.aircraft, 0, "the directory's document");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn snap(msgs: u64, far: f64) -> Snapshot {
         Snapshot {

@@ -227,7 +227,19 @@ async fn main() -> Result<()> {
     // Sampler: read readsb's JSON every 15 s; fold a sample into the ring
     // once a minute; persist once an hour (and at shutdown): a power cut
     // costs an hour of history, and the card takes one small write.
-    if let Some(dir) = cfg.input.readsb_json.clone() {
+    let sources: Vec<model::Source> = cfg
+        .input
+        .radio_json
+        .iter()
+        .map(|a| model::Source::Radio(a.clone()))
+        .chain(
+            cfg.input
+                .readsb_json
+                .iter()
+                .map(|d| model::Source::Dir(d.clone())),
+        )
+        .collect();
+    if !sources.is_empty() {
         let shared = shared.clone();
         let (lat, lon) = (cfg.station.lat, cfg.station.lon);
         let mpath = metrics_path.clone();
@@ -239,7 +251,7 @@ async fn main() -> Result<()> {
             let mut last_messages: Option<u64> = None;
             loop {
                 tick.tick().await;
-                let Some(snap) = model::read_snapshot(&dir, lat, lon) else {
+                let Some(snap) = model::read_snapshot(&sources, lat, lon).await else {
                     *shared.snapshot.lock().unwrap() = None;
                     continue;
                 };
@@ -288,7 +300,7 @@ async fn main() -> Result<()> {
                 mlat_stats_file: f.mlat.as_ref().map(|m| status::stats_file_for(m, n_mlat)),
             })
             .collect(),
-        readsb_configured: cfg.input.readsb_json.is_some(),
+        readsb_configured: cfg.input.readsb_json.is_some() || cfg.input.radio_json.is_some(),
         json_in_ram,
         card: disk::Meter::start(),
         shared: shared.clone(),
