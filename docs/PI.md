@@ -95,3 +95,44 @@ Raspberry Pi OS keeps the journal in RAM unless `/var/log/journal`
 exists; leave it that way. High-endurance cards (the "Endurance" lines)
 take ten times the writes of an ordinary one for a few dollars more and
 are the right choice for a station that must not be touched again.
+
+### Measuring it
+
+The kernel counts every sector written to the card; field 7 of
+`/sys/block/mmcblk0/stat` is sectors written since boot, 512 bytes
+each. Two readings some minutes apart are the whole bench:
+
+```sh
+a=$(awk '{print $7}' /sys/block/mmcblk0/stat); sleep 600
+b=$(awk '{print $7}' /sys/block/mmcblk0/stat)
+echo "$(( (b - a) * 512 / 1024 / 1024 )) MB in 10 min"
+```
+
+The dogfood Pi 3B measured 62–79 MB an hour (1.5 GB a day) with the
+radio's JSON on the card, before this rule. The page footer shows the
+same counter since stationd started, so no shell is needed after the
+first time; `/status.json` carries it as `card.written_bytes` and
+`card.bytes_per_hour`.
+
+### Moving a running station to the rule
+
+A station installed before 0.1.4 has its JSON under `state/` on the
+card. Three changes, then a restart:
+
+1. The service gets the RAM directory, as a drop-in (or reinstall the
+   unit from `deploy/stationd.service`):
+   ```sh
+   sudo mkdir -p /etc/systemd/system/stationd.service.d
+   printf '[Service]\nRuntimeDirectory=station\n' \
+     | sudo tee /etc/systemd/system/stationd.service.d/card.conf
+   sudo systemctl daemon-reload
+   ```
+2. In `station.toml`, every `state/readsb` becomes `/run/station/readsb`
+   (`readsb_json` and the `--write-json` of both program lines). With an
+   rx that has `--json-listen` (0.1.4 and later), the radio line takes
+   `--json-listen 127.0.0.1:30006` instead of `--write-json …
+   --write-json-every 1`, and `[input]` gains
+   `radio_json = "127.0.0.1:30006"`; the readsb line keeps its
+   `--write-json`, since readsb can only write files.
+3. `stationd --check`, then `sudo systemctl restart stationd`. The page
+   footer should read a few hundred kB after an hour, with no sentence.
